@@ -1,11 +1,11 @@
 import time
 import io
 import sys
+import subprocess
+import re
 
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 import pytesseract
 from PIL import Image, ImageEnhance, ImageFilter
 
@@ -13,12 +13,26 @@ PSEUDO = "Zollow"
 VOTE_URL = "https://serveur-prive.net/minecraft/velthar/vote"
 
 
+def get_chrome_version():
+    try:
+        result = subprocess.run(['google-chrome', '--version'], capture_output=True, text=True)
+        match = re.search(r'(\d+)\.', result.stdout)
+        if match:
+            return int(match.group(1))
+    except Exception:
+        pass
+    return None
+
+
 def get_driver():
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1280,900")
-    return uc.Chrome(options=options, use_subprocess=True)
+    version = get_chrome_version()
+    if version:
+        print(f"  Chrome version: {version}")
+    return uc.Chrome(options=options, use_subprocess=True, version_main=version)
 
 
 def preprocess_image(image):
