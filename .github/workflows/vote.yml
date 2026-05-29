@@ -26,6 +26,8 @@ jobs:
         run: pip install undetected-chromedriver selenium pytesseract Pillow
 
       - name: Voter
+        env:
+          VELTHAR_PASSWORD: ${{ secrets.VELTHAR_PASSWORD }}
         run: python vote.py
 
       - name: Sauvegarder screenshots
