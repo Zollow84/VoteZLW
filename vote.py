@@ -2,12 +2,10 @@ import time
 import io
 import sys
 
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 import pytesseract
 from PIL import Image, ImageEnhance, ImageFilter
 
@@ -16,15 +14,11 @@ VOTE_URL = "https://serveur-prive.net/minecraft/velthar/vote"
 
 
 def get_driver():
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless=new")
+    options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1280,900")
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36")
-    service = Service(ChromeDriverManager().install())
-    return webdriver.Chrome(service=service, options=options)
+    return uc.Chrome(options=options, use_subprocess=True)
 
 
 def preprocess_image(image):
@@ -70,18 +64,15 @@ def find_username_input(driver):
         "input[name='pseudo']",
         "input[name='username']",
         "input[name='nickname']",
-        "input[name='name']",
         "input[placeholder*='pseudo' i]",
-        "input[placeholder*='username' i]",
         "input[placeholder*='joueur' i]",
-        "input[placeholder*='nom' i]",
         "input[type='text']",
     ]
     for sel in selectors:
         try:
             el = driver.find_element(By.CSS_SELECTOR, sel)
             if el and el.is_displayed():
-                print(f"  Champ pseudo trouvé avec: {sel}")
+                print(f"  Champ trouvé: {sel}")
                 return el
         except Exception:
             continue
@@ -90,9 +81,9 @@ def find_username_input(driver):
 
 def refresh_captcha(driver):
     try:
-        refresh_btn = driver.find_element(By.CSS_SELECTOR,
+        btn = driver.find_element(By.CSS_SELECTOR,
             "[id*='refresh'], [class*='reload'], .mtcaptcha-reload")
-        refresh_btn.click()
+        btn.click()
         time.sleep(2)
     except Exception:
         pass
@@ -103,17 +94,15 @@ def vote():
     driver = get_driver()
     try:
         driver.get(VOTE_URL)
-        time.sleep(5)
+        time.sleep(8)
 
-        # Screenshot pour debug
         driver.save_screenshot("screenshot_page.png")
-        print(f"  Page title: {driver.title}")
-        print(f"  URL actuelle: {driver.current_url}")
+        print(f"  Title: {driver.title}")
+        print(f"  URL: {driver.current_url}")
 
         username_input = find_username_input(driver)
         if not username_input:
             print("ERREUR: Champ pseudo introuvable")
-            print("  HTML snippet:", driver.find_element(By.TAG_NAME, "body").get_attribute("innerHTML")[:2000])
             sys.exit(1)
 
         username_input.clear()
