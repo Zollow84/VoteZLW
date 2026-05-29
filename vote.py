@@ -17,11 +17,12 @@ VOTE_URL = "https://serveur-prive.net/minecraft/velthar/vote"
 
 def get_driver():
     options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1280,900")
+    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36")
     service = Service(ChromeDriverManager().install())
     return webdriver.Chrome(service=service, options=options)
 
@@ -64,6 +65,29 @@ def get_captcha_text(driver):
     return text.strip().replace(" ", "").replace("\n", "")
 
 
+def find_username_input(driver):
+    selectors = [
+        "input[name='pseudo']",
+        "input[name='username']",
+        "input[name='nickname']",
+        "input[name='name']",
+        "input[placeholder*='pseudo' i]",
+        "input[placeholder*='username' i]",
+        "input[placeholder*='joueur' i]",
+        "input[placeholder*='nom' i]",
+        "input[type='text']",
+    ]
+    for sel in selectors:
+        try:
+            el = driver.find_element(By.CSS_SELECTOR, sel)
+            if el and el.is_displayed():
+                print(f"  Champ pseudo trouvé avec: {sel}")
+                return el
+        except Exception:
+            continue
+    return None
+
+
 def refresh_captcha(driver):
     try:
         refresh_btn = driver.find_element(By.CSS_SELECTOR,
@@ -79,14 +103,25 @@ def vote():
     driver = get_driver()
     try:
         driver.get(VOTE_URL)
-        wait = WebDriverWait(driver, 15)
-        username_input = wait.until(EC.presence_of_element_located(
-            (By.CSS_SELECTOR, "input[name='pseudo'], input[placeholder*='pseudo' i]")
-        ))
+        time.sleep(5)
+
+        # Screenshot pour debug
+        driver.save_screenshot("screenshot_page.png")
+        print(f"  Page title: {driver.title}")
+        print(f"  URL actuelle: {driver.current_url}")
+
+        username_input = find_username_input(driver)
+        if not username_input:
+            print("ERREUR: Champ pseudo introuvable")
+            print("  HTML snippet:", driver.find_element(By.TAG_NAME, "body").get_attribute("innerHTML")[:2000])
+            sys.exit(1)
+
         username_input.clear()
         time.sleep(0.5)
         username_input.send_keys(PSEUDO)
+        print(f"  Pseudo '{PSEUDO}' entré")
         time.sleep(4)
+
         success = False
         for attempt in range(6):
             print(f"Tentative OCR #{attempt + 1}/6")
@@ -115,7 +150,9 @@ def vote():
             except Exception as e:
                 print(f"  Erreur: {e}")
                 time.sleep(1)
+
         if not success:
+            driver.save_screenshot("screenshot_echec.png")
             print("Echec apres 6 tentatives")
             sys.exit(1)
     finally:
