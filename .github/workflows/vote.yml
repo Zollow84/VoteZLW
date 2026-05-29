@@ -24,3 +24,11 @@ jobs:
 
       - name: Voter
         run: python vote.py
+
+      - name: Sauvegarder screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: "*.png"
+          if-no-files-found: ignore
