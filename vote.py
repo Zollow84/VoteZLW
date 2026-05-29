@@ -3,6 +3,7 @@ import io
 import sys
 import subprocess
 import re
+import os
 
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
@@ -13,6 +14,8 @@ from PIL import Image, ImageEnhance, ImageFilter
 
 PSEUDO = "Zollow"
 VOTE_URL = "https://serveur-prive.net/minecraft/velthar/vote"
+VELTHAR_URL = "https://www.velthar.fr"
+VELTHAR_PASSWORD = os.environ.get("VELTHAR_PASSWORD", "")
 
 
 def get_chrome_version():
@@ -64,11 +67,8 @@ def ocr_captcha(iframe):
     full_img.save("screenshot_captcha_iframe.png")
     w, h = full_img.size
     print(f"  Iframe: {w}x{h}px")
-
-    # La moitié droite contient l'image captcha
     crop = full_img.crop((int(w * 0.38), 2, int(w * 0.82), h - 2))
     crop.save("screenshot_captcha_crop.png")
-
     processed = preprocess_image(crop)
     config = "--psm 7 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
     text = pytesseract.image_to_string(processed, config=config)
@@ -77,11 +77,8 @@ def ocr_captcha(iframe):
 
 def type_in_captcha_input(driver, iframe, text):
     size = iframe.size
-    # L'input est dans la partie gauche de l'iframe (~20% x, 50% y)
     input_x = int(size['width'] * 0.20)
     input_y = int(size['height'] * 0.50)
-    print(f"  Click sur input à offset ({input_x}, {input_y}) dans iframe {size['width']}x{size['height']}")
-
     actions = ActionChains(driver)
     actions.move_to_element_with_offset(iframe, input_x, input_y)
     actions.click()
@@ -95,7 +92,6 @@ def type_in_captcha_input(driver, iframe, text):
 
 def refresh_captcha_click(driver, iframe):
     size = iframe.size
-    # Le bouton refresh est à ~90% x, 50% y
     refresh_x = int(size['width'] * 0.90)
     refresh_y = int(size['height'] * 0.50)
     actions = ActionChains(driver)
@@ -103,6 +99,73 @@ def refresh_captcha_click(driver, iframe):
     actions.click()
     actions.perform()
     time.sleep(2)
+
+
+def verifier_vote(driver):
+    if not VELTHAR_PASSWORD:
+        print("  VELTHAR_PASSWORD non défini, skip")
+        return
+
+    print("\n--- Vérification du vote sur Velthar ---")
+    try:
+        # Connexion
+        driver.get(f"{VELTHAR_URL}/login")
+        time.sleep(4)
+        driver.save_screenshot("screenshot_velthar_login.png")
+
+        # Champ pseudo
+        for sel in ["input[name='username']", "input[name='pseudo']",
+                    "input[name='login']", "input[name='name']",
+                    "input[placeholder*='pseudo' i]", "input[placeholder*='username' i]"]:
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, sel)
+                if el and el.is_displayed():
+                    el.clear()
+                    el.send_keys(PSEUDO)
+                    print(f"  Pseudo entré ({sel})")
+                    break
+            except Exception:
+                continue
+
+        # Champ mot de passe
+        pwd_field = driver.find_element(By.CSS_SELECTOR, "input[type='password']")
+        pwd_field.clear()
+        pwd_field.send_keys(VELTHAR_PASSWORD)
+
+        # Bouton connexion
+        submit = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
+        submit.click()
+        time.sleep(4)
+        driver.save_screenshot("screenshot_velthar_apres_login.png")
+        print(f"  Connecté, page: {driver.title}")
+
+        # Page de vote
+        driver.get(f"{VELTHAR_URL}/vote")
+        time.sleep(3)
+        driver.save_screenshot("screenshot_velthar_vote.png")
+
+        # Cherche bouton "VÉRIFIER MON VOTE"
+        buttons = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit'], input[type='button']")
+        clicked = False
+        for btn in buttons:
+            txt = (btn.text or btn.get_attribute("value") or "").lower()
+            if "vérif" in txt or "verif" in txt:
+                btn.click()
+                time.sleep(3)
+                driver.save_screenshot("screenshot_velthar_verifie.png")
+                print("  VOTE VÉRIFIÉ sur Velthar!")
+                clicked = True
+                break
+
+        if not clicked:
+            print("  Bouton vérification introuvable")
+            # Affiche tous les boutons pour debug
+            for btn in buttons[:10]:
+                print(f"    btn: '{btn.text[:50]}'")
+
+    except Exception as e:
+        print(f"  Erreur vérification: {e}")
+        driver.save_screenshot("screenshot_velthar_erreur.png")
 
 
 def vote():
@@ -115,11 +178,9 @@ def vote():
         print(f"  Title: {driver.title}")
 
         if "just a moment" in driver.title.lower():
-            print("  Cloudflare détecté, attente supplémentaire...")
+            print("  Cloudflare, attente...")
             time.sleep(10)
-            driver.save_screenshot("screenshot_page2.png")
 
-        # Remplir pseudo
         for sel in ["input[name='username']", "input[name='pseudo']", "input[type='text']"]:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, sel)
@@ -140,7 +201,7 @@ def vote():
             try:
                 iframe = get_mtcaptcha_iframe(driver)
                 if not iframe:
-                    print("  Iframe MTCaptcha introuvable")
+                    print("  Iframe introuvable")
                     time.sleep(2)
                     continue
 
@@ -148,7 +209,6 @@ def vote():
                 print(f"  OCR: '{captcha_text}'")
 
                 if len(captcha_text) < 3:
-                    print("  Texte trop court, refresh...")
                     refresh_captcha_click(driver, iframe)
                     continue
 
@@ -162,11 +222,10 @@ def vote():
 
                 page = driver.page_source.lower()
                 if any(w in page for w in ["succès", "success", "voté", "merci", "vote validé"]):
-                    print("VOTE REUSSI!")
+                    print("VOTE REUSSI sur serveur-prive.net!")
                     success = True
                     break
                 else:
-                    print("  Incorrect, refresh...")
                     iframe = get_mtcaptcha_iframe(driver)
                     if iframe:
                         refresh_captcha_click(driver, iframe)
@@ -179,6 +238,10 @@ def vote():
             driver.save_screenshot("screenshot_echec.png")
             print("Echec apres 6 tentatives")
             sys.exit(1)
+
+        # Vérifier le vote sur Velthar
+        verifier_vote(driver)
+
     finally:
         driver.quit()
 
