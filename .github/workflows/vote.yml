@@ -16,11 +16,14 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Installer Tesseract
-        run: sudo apt-get install -y tesseract-ocr
+      - name: Installer Xvfb et Tesseract
+        run: |
+          sudo apt-get install -y xvfb tesseract-ocr
+          Xvfb :99 -screen 0 1280x900x24 &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
 
       - name: Installer les packages Python
-        run: pip install selenium webdriver-manager pytesseract Pillow
+        run: pip install undetected-chromedriver selenium pytesseract Pillow
 
       - name: Voter
         run: python vote.py
