@@ -29,6 +29,8 @@ def get_driver():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1280,900")
+    options.add_argument("--disable-web-security")
+    options.add_argument("--allow-running-insecure-content")
     version = get_chrome_version()
     if version:
         print(f"  Chrome version: {version}")
@@ -47,128 +49,113 @@ def preprocess_image(image):
     return image
 
 
-CAPTCHA_SELECTORS = [
+CAPTCHA_IMG_SELECTORS = [
     "img.mtcaptcha-verifyimage",
     "canvas.mtcaptcha-verifyimage",
-    "#mtcaptcha img",
-    "#mtcaptcha canvas",
     "[id*='mtcaptcha'] img",
     "[id*='mtcaptcha'] canvas",
-    "img[src*='mtcaptcha']",
-    ".mtcaptcha img",
-    ".mtcaptcha canvas",
+    "img[src*='captcha']",
+    "img[src*='verify']",
+    "canvas",
+    "img",
+]
+
+CAPTCHA_INPUT_SELECTORS = [
+    "#mtcaptcha-verifyinput",
+    "input[id*='verify']",
+    "input[name*='captcha']",
+    "input[type='text']",
 ]
 
 
-def find_captcha_element(driver):
-    # Cherche dans la page principale
-    for sel in CAPTCHA_SELECTORS:
-        try:
-            el = driver.find_element(By.CSS_SELECTOR, sel)
-            if el:
-                print(f"  Captcha trouvé (page principale): {sel}")
-                return el, False
-        except Exception:
-            continue
-
-    # Cherche dans les iframes
+def get_captcha_text(driver):
+    # Cherche iframe mtcaptcha
     iframes = driver.find_elements(By.TAG_NAME, "iframe")
-    print(f"  {len(iframes)} iframe(s) détecté(s)")
-    for i, iframe in enumerate(iframes):
+    mtcaptcha_iframe = None
+    for iframe in iframes:
+        src = iframe.get_attribute("src") or ""
+        if "mtcaptcha" in src:
+            mtcaptcha_iframe = iframe
+            break
+
+    if mtcaptcha_iframe:
+        # Screenshot l'iframe entière (visuel, cross-origin ok)
+        img_bytes = mtcaptcha_iframe.screenshot_as_png
+        full_img = Image.open(io.BytesIO(img_bytes))
+        full_img.save("screenshot_captcha_iframe.png")
+
+        # Essaie d'accéder au DOM de l'iframe (fonctionne avec --disable-web-security)
         try:
-            src = iframe.get_attribute("src") or ""
-            print(f"  iframe {i}: {src[:80]}")
-            driver.switch_to.frame(iframe)
-            for sel in CAPTCHA_SELECTORS:
+            driver.switch_to.frame(mtcaptcha_iframe)
+            for sel in CAPTCHA_IMG_SELECTORS:
                 try:
                     el = driver.find_element(By.CSS_SELECTOR, sel)
                     if el:
-                        print(f"  Captcha trouvé (iframe {i}): {sel}")
-                        return el, True
+                        print(f"  Captcha img trouvé dans iframe: {sel}")
+                        img_bytes2 = el.screenshot_as_png
+                        image = Image.open(io.BytesIO(img_bytes2))
+                        image.save("screenshot_captcha_element.png")
+                        driver.switch_to.default_content()
+                        processed = preprocess_image(image)
+                        config = "--psm 8 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+                        text = pytesseract.image_to_string(processed, config=config)
+                        return text.strip().replace(" ", "").replace("\n", "")
                 except Exception:
                     continue
             driver.switch_to.default_content()
-        except Exception:
+        except Exception as e:
+            print(f"  Accès iframe échoué: {e}")
             driver.switch_to.default_content()
 
-    # Debug: liste toutes les images
-    driver.switch_to.default_content()
-    imgs = driver.find_elements(By.TAG_NAME, "img")
-    print(f"  {len(imgs)} image(s) sur la page:")
-    for img in imgs[:8]:
-        src = (img.get_attribute("src") or "")[:80]
-        cls = img.get_attribute("class") or ""
-        print(f"    class='{cls}' src='{src}'")
+        # Fallback: OCR sur l'iframe entière
+        print("  Fallback: OCR sur iframe complète")
+        w, h = full_img.size
+        # Crop la partie droite (image captcha)
+        cropped = full_img.crop((int(w * 0.35), 0, w - 30, h))
+        cropped.save("screenshot_captcha_crop.png")
+        processed = preprocess_image(cropped)
+        config = "--psm 8 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+        text = pytesseract.image_to_string(processed, config=config)
+        return text.strip().replace(" ", "").replace("\n", "")
 
-    return None, False
-
-
-def get_captcha_text(driver):
-    el, in_iframe = find_captcha_element(driver)
-    if not el:
-        raise Exception("Image CAPTCHA introuvable")
-
-    tag = el.tag_name
-    if tag == "canvas":
-        data_url = driver.execute_script("return arguments[0].toDataURL('image/png');", el)
-        img_data = io.BytesIO(
-            __import__('base64').b64decode(data_url.split(',')[1])
-        )
-        image = Image.open(img_data)
-    else:
-        image = Image.open(io.BytesIO(el.screenshot_as_png))
-
-    if in_iframe:
-        driver.switch_to.default_content()
-
-    processed = preprocess_image(image)
-    config = "--psm 8 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-    text = pytesseract.image_to_string(processed, config=config)
-    return text.strip().replace(" ", "").replace("\n", "")
+    raise Exception("Iframe MTCaptcha introuvable")
 
 
 def find_captcha_input(driver):
-    selectors = [
-        "#mtcaptcha-verifyinput",
-        "input[name='captcha']",
-        "input[id*='captcha' i]",
-        "input[placeholder*='captcha' i]",
-        ".mtcaptcha input",
-    ]
-    # Essaie page principale
-    for sel in selectors:
-        try:
-            el = driver.find_element(By.CSS_SELECTOR, sel)
-            if el:
-                return el, False
-        except Exception:
-            continue
-    # Essaie iframes
     iframes = driver.find_elements(By.TAG_NAME, "iframe")
     for iframe in iframes:
-        try:
-            driver.switch_to.frame(iframe)
-            for sel in selectors:
-                try:
-                    el = driver.find_element(By.CSS_SELECTOR, sel)
-                    if el:
-                        return el, True
-                except Exception:
-                    continue
-            driver.switch_to.default_content()
-        except Exception:
-            driver.switch_to.default_content()
+        src = iframe.get_attribute("src") or ""
+        if "mtcaptcha" in src:
+            try:
+                driver.switch_to.frame(iframe)
+                for sel in CAPTCHA_INPUT_SELECTORS:
+                    try:
+                        el = driver.find_element(By.CSS_SELECTOR, sel)
+                        if el:
+                            return el, True
+                    except Exception:
+                        continue
+                driver.switch_to.default_content()
+            except Exception:
+                driver.switch_to.default_content()
     return None, False
 
 
 def refresh_captcha(driver):
     try:
-        btn = driver.find_element(By.CSS_SELECTOR,
-            "[id*='refresh'], [class*='reload'], .mtcaptcha-reload")
-        btn.click()
-        time.sleep(2)
+        iframes = driver.find_elements(By.TAG_NAME, "iframe")
+        for iframe in iframes:
+            src = iframe.get_attribute("src") or ""
+            if "mtcaptcha" in src:
+                driver.switch_to.frame(iframe)
+                btn = driver.find_element(By.CSS_SELECTOR,
+                    "[id*='refresh'], [class*='reload'], button, [title*='refresh' i]")
+                btn.click()
+                driver.switch_to.default_content()
+                time.sleep(2)
+                return
     except Exception:
-        pass
+        driver.switch_to.default_content()
 
 
 def vote():
@@ -177,50 +164,40 @@ def vote():
     try:
         driver.get(VOTE_URL)
         time.sleep(8)
-
         driver.save_screenshot("screenshot_page.png")
         print(f"  Title: {driver.title}")
 
-        # Remplir le pseudo
-        input_selectors = [
-            "input[name='pseudo']", "input[name='username']",
-            "input[name='nickname']", "input[placeholder*='pseudo' i]",
-            "input[placeholder*='joueur' i]", "input[type='text']",
-        ]
-        username_input = None
-        for sel in input_selectors:
+        # Remplir pseudo
+        for sel in ["input[name='username']", "input[name='pseudo']", "input[type='text']"]:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, sel)
                 if el and el.is_displayed():
-                    username_input = el
-                    print(f"  Champ pseudo: {sel}")
+                    el.clear()
+                    time.sleep(0.3)
+                    el.send_keys(PSEUDO)
+                    print(f"  Pseudo entré ({sel})")
                     break
             except Exception:
                 continue
 
-        if not username_input:
-            print("ERREUR: Champ pseudo introuvable")
-            sys.exit(1)
-
-        username_input.clear()
-        time.sleep(0.5)
-        username_input.send_keys(PSEUDO)
-        print(f"  Pseudo '{PSEUDO}' entré")
         time.sleep(5)
 
         success = False
         for attempt in range(6):
-            print(f"Tentative OCR #{attempt + 1}/6")
+            print(f"Tentative #{attempt + 1}/6")
             try:
                 captcha_text = get_captcha_text(driver)
-                print(f"  Texte: '{captcha_text}'")
+                print(f"  Texte OCR: '{captcha_text}'")
+
                 if len(captcha_text) < 3:
+                    print("  Texte trop court, refresh...")
                     refresh_captcha(driver)
                     continue
 
                 captcha_input, in_iframe = find_captcha_input(driver)
                 if not captcha_input:
-                    print("  Champ captcha introuvable")
+                    print("  Input captcha introuvable")
+                    driver.switch_to.default_content()
                     continue
 
                 captcha_input.clear()
@@ -240,9 +217,12 @@ def vote():
                     success = True
                     break
                 else:
+                    print("  Incorrect, retry...")
                     refresh_captcha(driver)
+
             except Exception as e:
                 print(f"  Erreur: {e}")
+                driver.switch_to.default_content()
                 time.sleep(1)
 
         if not success:
