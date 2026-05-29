@@ -1,0 +1,26 @@
+name: Vote Velthar
+
+on:
+  schedule:
+    - cron: "0 0,3,6,9,12,15,18,21 * * *"
+    - cron: "30 1,4,7,10,13,16,19,22 * * *"
+  workflow_dispatch:
+
+jobs:
+  vote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer Tesseract
+        run: sudo apt-get install -y tesseract-ocr
+
+      - name: Installer les packages Python
+        run: pip install selenium webdriver-manager pytesseract Pillow
+
+      - name: Voter
+        run: python vote.py
