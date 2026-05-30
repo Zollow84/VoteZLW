@@ -23,11 +23,12 @@ jobs:
           echo "DISPLAY=:99" >> $GITHUB_ENV
 
       - name: Installer les packages Python
-        run: pip install undetected-chromedriver selenium pytesseract Pillow
+        run: pip install undetected-chromedriver selenium pytesseract Pillow requests
 
       - name: Voter
         env:
           VELTHAR_PASSWORD: ${{ secrets.VELTHAR_PASSWORD }}
+          TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
         run: python vote.py
 
       - name: Sauvegarder screenshots
