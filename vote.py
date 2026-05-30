@@ -494,6 +494,10 @@ def vote():
                     print("VOTE REUSSI!")
                     success = True
                     break
+                elif "déjà voté" in page or "deja vote" in page:
+                    print("  Déjà voté sur serveur-prive (cooldown) → passage à la vérification Velthar")
+                    success = True
+                    break
                 elif "ip n'est pas autorisée" in page or "ip n est pas autorisee" in page:
                     print("  ERREUR IP : l'IP n'est pas autorisée à voter (proxy bloqué ou cooldown)")
                     break
