@@ -47,8 +47,8 @@ def ocr_captcha(iframe):
     w, h = full_img.size
     print(f"  Iframe: {w}x{h}px")
 
-    # Crop serré sur le texte uniquement (exclure "Vérifié avec" en bas)
-    crop = full_img.crop((int(w * 0.38), 2, int(w * 0.82), int(h * 0.62)))
+    # Crop élargi pour ne pas couper de lettre, sans "Vérifié avec" en bas
+    crop = full_img.crop((int(w * 0.33), 2, int(w * 0.87), int(h * 0.62)))
     crop.save("screenshot_captcha_crop.png")
 
     cfg_word  = "--psm 8 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -73,18 +73,19 @@ def ocr_captcha(iframe):
         (prep(crop.copy(), invert=False, threshold=100), cfg_word),
     ]
 
+    best = ""
     for i, (processed, cfg) in enumerate(variants, 1):
         try:
             processed.save(f"screenshot_captcha_v{i}.png")
             text = pytesseract.image_to_string(processed, config=cfg)
             text = text.strip().replace(" ", "").replace("\n", "")
             print(f"  OCR v{i}: '{text}'")
-            if len(text) >= 4:
-                return text
+            if len(text) > len(best):
+                best = text
         except Exception as e:
             print(f"  OCR v{i} erreur: {e}")
 
-    return ""
+    return best
 
 
 def get_mtcaptcha_iframe(driver):
@@ -97,8 +98,6 @@ def get_mtcaptcha_iframe(driver):
 
 
 def get_mtcaptcha_token(driver):
-    """Tente de trouver le token MTCaptcha via plusieurs méthodes"""
-    # Méthode 1 : API JS officielle
     for js in [
         "return window.mtcaptcha ? window.mtcaptcha.getVerifiedToken() : null",
         "return window.mtcaptchaConfig ? window.mtcaptchaConfig.verifiedToken : null",
@@ -112,7 +111,6 @@ def get_mtcaptcha_token(driver):
         except Exception:
             pass
 
-    # Méthode 2 : scanner tous les inputs (debug + recherche token)
     try:
         inputs = driver.find_elements(By.TAG_NAME, "input")
         for el in inputs:
@@ -134,7 +132,6 @@ def get_mtcaptcha_token(driver):
 
 
 def check_mtcaptcha_iframe_verified(driver, iframe):
-    """Vérifie si le widget MTCaptcha affiche l'état 'succès' dans l'iframe"""
     try:
         driver.switch_to.frame(iframe)
         src = driver.page_source.lower()
@@ -310,7 +307,8 @@ def vote():
                 captcha_text = ocr_captcha(iframe)
                 print(f"  OCR final: '{captcha_text}'")
 
-                if len(captcha_text) < 4:
+                # Seuil minimum 3 chars (captcha peut être court)
+                if len(captcha_text) < 3:
                     refresh_captcha_click(driver, iframe)
                     time.sleep(2)
                     continue
