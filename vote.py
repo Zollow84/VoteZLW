@@ -46,6 +46,8 @@ def get_chrome_version():
 def start_local_proxy():
     """Lance pproxy : relais local 127.0.0.1 -> proxy authentifié upstream (tunnel, sans interception SSL)."""
     global _proxy_proc
+    if _proxy_proc is not None:
+        return
     remote = f"http://{PROXY_HOST}:{PROXY_PORT}#{PROXY_USER}:{PROXY_PASS}"
     cmd = [sys.executable, "-m", "pproxy",
            "-l", f"http://127.0.0.1:{LOCAL_PROXY_PORT}",
@@ -65,7 +67,7 @@ def stop_local_proxy():
         _proxy_proc = None
 
 
-def get_driver():
+def get_driver(use_proxy=True):
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -75,12 +77,14 @@ def get_driver():
     if version:
         print(f"  Chrome version: {version}")
 
-    if PROXY_HOST and PROXY_PORT and PROXY_USER:
+    if use_proxy and PROXY_HOST and PROXY_PORT and PROXY_USER:
         start_local_proxy()
         options.add_argument(f"--proxy-server=http://127.0.0.1:{LOCAL_PROXY_PORT}")
-    elif PROXY_HOST and PROXY_PORT:
+    elif use_proxy and PROXY_HOST and PROXY_PORT:
         options.add_argument(f"--proxy-server=http://{PROXY_HOST}:{PROXY_PORT}")
         print(f"  Proxy: {PROXY_HOST}:{PROXY_PORT}")
+    elif not use_proxy:
+        print("  (connexion directe, sans proxy)")
 
     return uc.Chrome(options=options, use_subprocess=True, version_main=version)
 
@@ -371,54 +375,6 @@ def login_velthar(driver):
     print(f"  Login Velthar: {driver.current_url}")
 
 
-def open_serveurprive_from_velthar(driver):
-    """Sur velthar.fr/vote, clique 'VOTER MAINTENANT' pour ouvrir serveur-prive (parcours de suivi)."""
-    driver.get(f"{VELTHAR_URL}/vote")
-    time.sleep(5)
-    before = list(driver.window_handles)
-
-    target = None
-    for el in driver.find_elements(By.CSS_SELECTOR, "a, button"):
-        txt = (el.text or "").strip().upper()
-        if "VOTER MAINTENANT" in txt:
-            target = el
-            break
-    if not target:
-        for el in driver.find_elements(By.CSS_SELECTOR, "a, button"):
-            txt = (el.text or "").strip().upper()
-            if "JE VOTE" in txt:
-                target = el
-                break
-
-    if not target:
-        print("  Bouton 'VOTER MAINTENANT' introuvable sur Velthar")
-        return False
-
-    print(f"  Clic sur: '{target.text.strip()}'")
-    try:
-        driver.execute_script("arguments[0].click();", target)
-    except Exception as e:
-        print(f"  Erreur clic: {e}")
-        return False
-    time.sleep(5)
-
-    # Si un nouvel onglet s'est ouvert, basculer dessus
-    after = list(driver.window_handles)
-    if len(after) > len(before):
-        newh = [h for h in after if h not in before][0]
-        driver.switch_to.window(newh)
-        print("  Nouvel onglet serveur-prive ouvert")
-
-    print(f"  URL actuelle: {driver.current_url}")
-
-    # Sécurité : si on n'est pas sur serveur-prive, y aller directement
-    if "serveur-prive" not in (driver.current_url or ""):
-        print("  Pas sur serveur-prive → navigation directe")
-        driver.get(VOTE_URL)
-        time.sleep(3)
-    return True
-
-
 def do_captcha_vote(driver):
     """Effectue le vote sur serveur-prive. Retourne 'ok', 'already' ou 'fail'."""
     enter_pseudo(driver)
@@ -537,22 +493,15 @@ def vote():
     else:
         print("  Mode captcha: OCR Tesseract (TWOCAPTCHA_API_KEY absent)")
 
-    driver = get_driver()
+    # ÉTAPE 1 : voter sur serveur-prive AVEC le proxy résidentiel français
+    print("\n=== ÉTAPE 1 : Vote serveur-prive (proxy) ===")
+    result = "fail"
+    driver = get_driver(use_proxy=True)
     try:
         if PROXY_HOST:
             check_ip(driver)
 
-        velthar_flow = bool(VELTHAR_PASSWORD)
-
-        if velthar_flow:
-            # Parcours complet : Velthar -> serveur-prive -> retour Velthar
-            login_velthar(driver)
-            if not open_serveurprive_from_velthar(driver):
-                print("  Fallback: navigation directe serveur-prive")
-                driver.get(VOTE_URL)
-        else:
-            driver.get(VOTE_URL)
-
+        driver.get(VOTE_URL)
         time.sleep(8)
         driver.save_screenshot("screenshot_page.png")
         print(f"  Title: {driver.title}")
@@ -563,19 +512,25 @@ def vote():
 
         result = do_captcha_vote(driver)
         print(f"  Résultat serveur-prive: {result}")
-
-        if result == "fail":
-            driver.save_screenshot("screenshot_echec.png")
-            print("Echec du vote serveur-prive")
-            sys.exit(1)
-
-        # Vote OK ou déjà voté -> aller cliquer VÉRIFIER MON VOTE sur Velthar
-        if velthar_flow:
-            claim_velthar(driver)
-
     finally:
         driver.quit()
+
+    if result == "fail":
+        print("Echec du vote serveur-prive")
         stop_local_proxy()
+        sys.exit(1)
+
+    # ÉTAPE 2 : vérifier sur Velthar EN CONNEXION DIRECTE (IP stable = session valide)
+    if VELTHAR_PASSWORD:
+        print("\n=== ÉTAPE 2 : Vérification Velthar (connexion directe) ===")
+        driver2 = get_driver(use_proxy=False)
+        try:
+            login_velthar(driver2)
+            claim_velthar(driver2)
+        finally:
+            driver2.quit()
+
+    stop_local_proxy()
 
 
 vote()
