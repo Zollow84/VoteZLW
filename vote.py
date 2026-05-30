@@ -376,57 +376,47 @@ def login_velthar(driver):
 
 
 def click_voter_maintenant(driver):
-    """Sur velthar.fr/vote, clique 'VOTER MAINTENANT' (déclenche l'état 'vote en cours' côté Velthar)
-    et amène sur serveur-prive."""
+    """Déclenche l'action Livewire selectWebsite (serveur-prive) SANS naviguer (garde Velthar vivant),
+    puis ouvre serveur-prive dans un onglet séparé pour voter."""
     driver.get(f"{VELTHAR_URL}/vote")
     time.sleep(5)
     driver.save_screenshot("screenshot_velthar_avant_clic.png")
     before = list(driver.window_handles)
 
-    target = None
-    for el in driver.find_elements(By.CSS_SELECTOR, "a, button"):
-        txt = (el.text or "").strip().upper()
-        if "VOTER MAINTENANT" in txt:
-            target = el
-            break
+    # Déclencher wire:click="selectWebsite(...)" du bloc serveur-prive, en retirant le href
+    # du <a> parent pour empêcher l'onglet Velthar de naviguer (il doit rester vivant).
+    clicked = driver.execute_script("""
+        var els = document.querySelectorAll('div, a, button');
+        for (var i = 0; i < els.length; i++) {
+            var w = els[i].getAttribute('wire:click');
+            if (!w) continue;
+            var a = els[i].closest('a');
+            var href = a ? (a.getAttribute('href') || '') : '';
+            if (href.indexOf('serveur-prive') !== -1) {
+                if (a) { a.removeAttribute('href'); a.removeAttribute('target'); }
+                els[i].click();
+                return w + ' | ' + href;
+            }
+        }
+        return null;
+    """)
+    print(f"  Livewire selectWebsite déclenché: {clicked}")
+    if not clicked:
+        print("  wire:click serveur-prive introuvable")
 
-    if not target:
-        print("  Bouton 'VOTER MAINTENANT' introuvable sur Velthar")
-        return False
+    time.sleep(6)  # laisser Livewire mettre à jour la page (-> VÉRIFIER MON VOTE)
+    driver.save_screenshot("screenshot_velthar_apres_select.png")
 
-    print(f"  Clic sur: '{target.text.strip()}'")
-    # DIAGNOSTIC : structure du bouton (pour savoir comment forcer un nouvel onglet)
-    try:
-        html = driver.execute_script("return arguments[0].outerHTML;", target)
-        href = target.get_attribute("href")
-        onclick = target.get_attribute("onclick")
-        parent_html = driver.execute_script(
-            "return arguments[0].parentElement ? arguments[0].parentElement.outerHTML.substring(0,400) : '';", target)
-        print(f"  [diag] tag={target.tag_name} href={href} onclick={onclick}")
-        print(f"  [diag] HTML bouton: {html[:300]}")
-        print(f"  [diag] HTML parent: {parent_html}")
-    except Exception as e:
-        print(f"  [diag] erreur inspection: {e}")
-    # Forcer l'ouverture dans un NOUVEL onglet pour garder la page Velthar vivante
-    try:
-        driver.execute_script("arguments[0].setAttribute('target', '_blank');", target)
-    except Exception:
-        pass
-    try:
-        driver.execute_script("arguments[0].click();", target)
-    except Exception as e:
-        print(f"  Erreur clic: {e}")
-        return False
-    time.sleep(6)
-
-    # Basculer sur le nouvel onglet serveur-prive (l'onglet Velthar reste vivant derrière)
+    # Ouvrir serveur-prive dans un NOUVEL onglet (l'onglet Velthar reste vivant derrière)
+    driver.execute_script("window.open(arguments[0], '_blank');", VOTE_URL)
+    time.sleep(4)
     after = list(driver.window_handles)
-    if len(after) > len(before):
-        newh = [h for h in after if h not in before][0]
-        driver.switch_to.window(newh)
-        print("  Nouvel onglet serveur-prive ouvert (Velthar reste vivant)")
+    newtabs = [h for h in after if h not in before]
+    if newtabs:
+        driver.switch_to.window(newtabs[-1])
+        print("  Onglet serveur-prive ouvert (Velthar reste vivant)")
     else:
-        print("  ATTENTION: pas de nouvel onglet, la page Velthar a peut-être été remplacée")
+        print("  ATTENTION: pas de nouvel onglet ouvert")
 
     print(f"  URL actuelle: {driver.current_url}")
 
@@ -516,31 +506,34 @@ def do_captcha_vote(driver):
 
 
 def claim_velthar(driver, velthar_handle=None):
-    """Navigue vers velthar.fr/vote et clique 'VÉRIFIER MON VOTE'."""
+    """Revient sur l'onglet Velthar VIVANT (sans recharger, pour garder l'état Livewire) et clique 'VÉRIFIER MON VOTE'."""
     print("\n--- Vérification Velthar (VÉRIFIER MON VOTE) ---")
     if velthar_handle and velthar_handle in driver.window_handles:
         driver.switch_to.window(velthar_handle)
+        print("  Retour sur l'onglet Velthar vivant (sans recharger)")
+    else:
+        driver.get(f"{VELTHAR_URL}/vote")
+        time.sleep(5)
 
     for essai in range(10):
-        driver.get(f"{VELTHAR_URL}/vote")
         time.sleep(5)
         driver.save_screenshot(f"screenshot_velthar_verif_{essai}.png")
 
         # DIAGNOSTIC : sommes-nous connectés à Velthar ?
         page = driver.page_source.lower()
         connecte = ("zollow" in page) or ("déconnexion" in page) or ("vous avez" in page and "vote" in page)
-        print(f"  [diag] Connecté Velthar: {connecte} | 'zollow' présent: {'zollow' in page} | 'se connecter' présent: {'se connecter' in page}")
+        print(f"  [diag] Connecté Velthar: {connecte} | 'zollow' présent: {'zollow' in page}")
 
-        all_els = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit']")
-        textes = [e.text.strip() for e in all_els if e.text.strip()]
-        print(f"  Essai {essai + 1}/10 - Boutons: {textes[:14]}")
-
+        all_els = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit'], div")
         verif_btn = None
         for el in all_els:
             txt = (el.text or "").strip().upper()
-            if "VERIF" in txt or "VÉRIF" in txt:
+            if ("VERIF" in txt or "VÉRIF" in txt) and len(txt) < 40:
                 verif_btn = el
                 break
+
+        boutons = [e.text.strip() for e in driver.find_elements(By.CSS_SELECTOR, "button, a") if e.text.strip()]
+        print(f"  Essai {essai + 1}/10 - Boutons: {boutons[:14]}")
 
         if verif_btn:
             driver.execute_script("arguments[0].click();", verif_btn)
@@ -549,8 +542,8 @@ def claim_velthar(driver, velthar_handle=None):
             print("  VOTE VÉRIFIÉ sur Velthar!")
             return True
 
-        print("  Bouton VÉRIFIER pas encore là, attente 12s...")
-        time.sleep(12)
+        print("  Bouton VÉRIFIER pas encore là, attente 10s...")
+        time.sleep(10)
 
     print("  Bouton VÉRIFIER introuvable")
     return False
@@ -572,7 +565,7 @@ def vote():
 
         velthar_handle = None
         if velthar_flow:
-            print("\n=== Connexion Velthar + clic VOTER MAINTENANT ===")
+            print("\n=== Connexion Velthar + Livewire selectWebsite ===")
             login_velthar(driver)
             velthar_handle = driver.current_window_handle
             if not click_voter_maintenant(driver):
