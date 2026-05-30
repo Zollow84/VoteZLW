@@ -97,26 +97,59 @@ def get_mtcaptcha_iframe(driver):
 
 
 def get_mtcaptcha_token(driver):
+    """Tente de trouver le token MTCaptcha via plusieurs méthodes"""
+    # Méthode 1 : API JS officielle
+    for js in [
+        "return window.mtcaptcha ? window.mtcaptcha.getVerifiedToken() : null",
+        "return window.mtcaptchaConfig ? window.mtcaptchaConfig.verifiedToken : null",
+        "return typeof mtcaptcha !== 'undefined' ? mtcaptcha.getVerifiedToken() : null",
+    ]:
+        try:
+            token = driver.execute_script(js)
+            if token and len(token) > 10:
+                print(f"  Token JS: '{token[:25]}...'")
+                return token
+        except Exception:
+            pass
+
+    # Méthode 2 : scanner tous les inputs (debug + recherche token)
     try:
-        token = driver.execute_script(
-            "return window.mtcaptcha ? window.mtcaptcha.getVerifiedToken() : null"
-        )
-        if token and len(token) > 10:
-            return token
+        inputs = driver.find_elements(By.TAG_NAME, "input")
+        for el in inputs:
+            try:
+                name  = el.get_attribute('name') or ''
+                id_   = el.get_attribute('id') or ''
+                type_ = el.get_attribute('type') or ''
+                val   = el.get_attribute('value') or ''
+                if len(val) > 15:
+                    print(f"  Input: name='{name}' id='{id_}' type='{type_}' val='{val[:30]}...'")
+                    if any(k in (name + id_).lower() for k in ['captcha', 'token', 'verify', 'mtcaptcha']):
+                        return val
+            except Exception:
+                continue
     except Exception:
         pass
-    try:
-        for sel in ["input[name='mtcaptcha-verifiedtoken']",
-                    "input[name='mtcaptchatoken']",
-                    "input[id='mtcaptcha-verifiedtoken']"]:
-            els = driver.find_elements(By.CSS_SELECTOR, sel)
-            for el in els:
-                v = el.get_attribute('value') or ''
-                if len(v) > 10:
-                    return v
-    except Exception:
-        pass
+
     return ""
+
+
+def check_mtcaptcha_iframe_verified(driver, iframe):
+    """Vérifie si le widget MTCaptcha affiche l'état 'succès' dans l'iframe"""
+    try:
+        driver.switch_to.frame(iframe)
+        src = driver.page_source.lower()
+        driver.switch_to.default_content()
+        markers = ['verifybox-green', 'mtcap-verified', 'succès', 'success', 'checkmark']
+        found = [m for m in markers if m in src]
+        if found:
+            print(f"  Iframe verified markers: {found}")
+            return True
+    except Exception:
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+    return False
 
 
 def enter_pseudo(driver):
@@ -294,15 +327,19 @@ def vote():
                 token_after = get_mtcaptcha_token(driver)
                 print(f"  Token après: '{token_after[:20]}...'" if token_after else "  Token après: aucun")
 
-                if not token_after or token_after == token_before:
-                    print("  Token non renouvelé → captcha invalide, refresh")
+                iframe_ok = check_mtcaptcha_iframe_verified(driver, iframe)
+
+                captcha_valide = (token_after and token_after != token_before) or iframe_ok
+
+                if not captcha_valide:
+                    print("  Captcha non validé → refresh")
                     iframe = get_mtcaptcha_iframe(driver)
                     if iframe:
                         refresh_captcha_click(driver, iframe)
                     time.sleep(2)
                     continue
 
-                print("  Nouveau token OK, soumission...")
+                print("  Captcha validé, soumission...")
                 vote_button = driver.find_element(By.CSS_SELECTOR,
                     "button[type='submit'], input[type='submit']")
                 vote_button.click()
