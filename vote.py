@@ -14,7 +14,7 @@ from PIL import Image, ImageEnhance, ImageFilter
 
 PSEUDO = "Zollow"
 VOTE_URL = "https://serveur-prive.net/minecraft/velthar/vote"
-VELTHAR_URL = "https://www.velthar.fr"
+VELTHAR_URL = "https://velthar.fr"
 VELTHAR_PASSWORD = os.environ.get("VELTHAR_PASSWORD", "")
 
 
@@ -108,7 +108,7 @@ def verifier_vote(driver):
 
     print("\n--- Vérification du vote sur Velthar ---")
     try:
-        driver.get(f"{VELTHAR_URL}/login")
+        driver.get("https://velthar.fr/auth/login")
         time.sleep(4)
         driver.save_screenshot("screenshot_velthar_login.png")
         print(f"  Login page title: {driver.title}")
