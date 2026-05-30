@@ -4,7 +4,9 @@ import sys
 import subprocess
 import re
 import os
+import base64
 
+import requests
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
@@ -16,6 +18,9 @@ PSEUDO = "Zollow"
 VOTE_URL = "https://serveur-prive.net/minecraft/velthar/vote"
 VELTHAR_URL = "https://velthar.fr"
 VELTHAR_PASSWORD = os.environ.get("VELTHAR_PASSWORD", "")
+TWOCAPTCHA_API_KEY = os.environ.get("TWOCAPTCHA_API_KEY", "")
+
+CAPTCHA_2CAPTCHA_IMG = "screenshot_captcha_2captcha.png"
 
 
 def get_chrome_version():
@@ -40,20 +45,82 @@ def get_driver():
     return uc.Chrome(options=options, use_subprocess=True, version_main=version)
 
 
-def ocr_captcha(iframe):
+def prepare_captcha_images(iframe):
+    """Screenshot l'iframe, crop sur le texte, sauve une image propre pour 2captcha
+    et retourne le crop couleur (pour OCR de secours)."""
     img_bytes = iframe.screenshot_as_png
     full_img = Image.open(io.BytesIO(img_bytes))
     full_img.save("screenshot_captcha_iframe.png")
     w, h = full_img.size
     print(f"  Iframe: {w}x{h}px")
 
-    # Crop élargi pour ne pas couper de lettre, sans "Vérifié avec" en bas
+    # Crop sur la zone du texte (exclure "Vérifié avec" en bas)
     crop = full_img.crop((int(w * 0.33), 2, int(w * 0.87), int(h * 0.62)))
     crop.save("screenshot_captcha_crop.png")
 
+    # Image propre agrandie pour 2captcha (humain) - pas de binarisation
+    clean = crop.convert("RGB").resize((crop.width * 4, crop.height * 4), Image.LANCZOS)
+    clean = ImageEnhance.Contrast(clean).enhance(1.5)
+    clean.save(CAPTCHA_2CAPTCHA_IMG)
+
+    return crop
+
+
+def solve_with_2captcha(image_path):
+    """Envoie l'image à 2captcha et récupère le texte résolu par un humain."""
+    if not TWOCAPTCHA_API_KEY:
+        return ""
+    try:
+        with open(image_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+
+        resp = requests.post("http://2captcha.com/in.php", data={
+            "key": TWOCAPTCHA_API_KEY,
+            "method": "base64",
+            "body": b64,
+            "json": 1,
+            "phrase": 0,
+            "case": 1,        # sensible à la casse (majuscules/minuscules)
+            "numeric": 0,
+            "min_len": 3,
+            "max_len": 8,
+        }, timeout=30)
+        data = resp.json()
+        if data.get("status") != 1:
+            print(f"  2captcha soumission erreur: {data.get('request')}")
+            return ""
+
+        cid = data["request"]
+        print(f"  2captcha id={cid}, attente solution...")
+
+        for _ in range(24):  # ~120s max
+            time.sleep(5)
+            r = requests.get("http://2captcha.com/res.php", params={
+                "key": TWOCAPTCHA_API_KEY,
+                "action": "get",
+                "id": cid,
+                "json": 1,
+            }, timeout=30)
+            rd = r.json()
+            if rd.get("status") == 1:
+                sol = (rd.get("request") or "").strip()
+                print(f"  2captcha solution: '{sol}'")
+                return sol
+            if rd.get("request") != "CAPCHA_NOT_READY":
+                print(f"  2captcha erreur: {rd.get('request')}")
+                return ""
+
+        print("  2captcha timeout")
+        return ""
+    except Exception as e:
+        print(f"  2captcha exception: {e}")
+        return ""
+
+
+def ocr_captcha(crop):
+    """OCR Tesseract de secours si 2captcha indisponible."""
     cfg_word  = "--psm 8 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
     cfg_line  = "--psm 7 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-    cfg_block = "--psm 6 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
     def prep(img, invert=False, threshold=128, scale=4):
         img = img.convert("RGB").resize((img.width * scale, img.height * scale), Image.LANCZOS)
@@ -67,16 +134,12 @@ def ocr_captcha(iframe):
     variants = [
         (prep(crop.copy(), invert=True,  threshold=80),  cfg_word),
         (prep(crop.copy(), invert=False, threshold=200), cfg_word),
-        (prep(crop.copy(), invert=True,  threshold=80),  cfg_line),
-        (prep(crop.copy(), invert=False, threshold=150), cfg_block),
-        (prep(crop.copy(), invert=True,  threshold=120), cfg_word),
-        (prep(crop.copy(), invert=False, threshold=100), cfg_word),
+        (prep(crop.copy(), invert=True,  threshold=120), cfg_line),
     ]
 
     best = ""
     for i, (processed, cfg) in enumerate(variants, 1):
         try:
-            processed.save(f"screenshot_captcha_v{i}.png")
             text = pytesseract.image_to_string(processed, config=cfg)
             text = text.strip().replace(" ", "").replace("\n", "")
             print(f"  OCR v{i}: '{text}'")
@@ -84,8 +147,18 @@ def ocr_captcha(iframe):
                 best = text
         except Exception as e:
             print(f"  OCR v{i} erreur: {e}")
-
     return best
+
+
+def read_captcha(iframe):
+    """Lit le captcha : 2captcha en priorité, OCR Tesseract en secours."""
+    crop = prepare_captcha_images(iframe)
+    if TWOCAPTCHA_API_KEY:
+        sol = solve_with_2captcha(CAPTCHA_2CAPTCHA_IMG)
+        if sol:
+            return sol
+        print("  2captcha a échoué, fallback OCR")
+    return ocr_captcha(crop)
 
 
 def get_mtcaptcha_iframe(driver):
@@ -97,56 +170,55 @@ def get_mtcaptcha_iframe(driver):
     return None
 
 
-def get_mtcaptcha_token(driver):
+def snapshot_input_values(driver):
+    """Capture toutes les valeurs des inputs (pour détecter un nouveau token après)."""
+    values = set()
+    try:
+        for el in driver.find_elements(By.TAG_NAME, "input"):
+            try:
+                v = el.get_attribute('value') or ''
+                if len(v) > 10:
+                    values.add(v)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return values
+
+
+def find_new_verified_token(driver, before_values):
+    """Cherche le vrai token MTCaptcha : une nouvelle valeur longue apparue après validation."""
+    # 1) API JS officielle
     for js in [
         "return window.mtcaptcha ? window.mtcaptcha.getVerifiedToken() : null",
-        "return window.mtcaptchaConfig ? window.mtcaptchaConfig.verifiedToken : null",
         "return typeof mtcaptcha !== 'undefined' ? mtcaptcha.getVerifiedToken() : null",
     ]:
         try:
             token = driver.execute_script(js)
-            if token and len(token) > 10:
-                print(f"  Token JS: '{token[:25]}...'")
+            if token and len(token) > 20:
+                print(f"  Token MTCaptcha (JS): '{token[:25]}...'")
                 return token
         except Exception:
             pass
 
+    # 2) Nouvel input apparu (le verified-token MTCaptcha est ajouté au form après succès)
     try:
-        inputs = driver.find_elements(By.TAG_NAME, "input")
-        for el in inputs:
+        for el in driver.find_elements(By.TAG_NAME, "input"):
             try:
-                name  = el.get_attribute('name') or ''
-                id_   = el.get_attribute('id') or ''
-                type_ = el.get_attribute('type') or ''
-                val   = el.get_attribute('value') or ''
-                if len(val) > 15:
-                    print(f"  Input: name='{name}' id='{id_}' type='{type_}' val='{val[:30]}...'")
-                    if any(k in (name + id_).lower() for k in ['captcha', 'token', 'verify', 'mtcaptcha']):
-                        return val
+                name = el.get_attribute('name') or ''
+                val  = el.get_attribute('value') or ''
+                # ignorer le CSRF Laravel (_token) et les valeurs déjà présentes avant
+                if name == '_token':
+                    continue
+                if len(val) > 20 and val not in before_values:
+                    print(f"  Nouveau token (input name='{name}'): '{val[:25]}...'")
+                    return val
             except Exception:
                 continue
     except Exception:
         pass
 
     return ""
-
-
-def check_mtcaptcha_iframe_verified(driver, iframe):
-    try:
-        driver.switch_to.frame(iframe)
-        src = driver.page_source.lower()
-        driver.switch_to.default_content()
-        markers = ['verifybox-green', 'mtcap-verified', 'succès', 'success', 'checkmark']
-        found = [m for m in markers if m in src]
-        if found:
-            print(f"  Iframe verified markers: {found}")
-            return True
-    except Exception:
-        try:
-            driver.switch_to.default_content()
-        except Exception:
-            pass
-    return False
 
 
 def enter_pseudo(driver):
@@ -280,6 +352,11 @@ def verifier_vote(driver):
 
 def vote():
     print(f"[{time.strftime('%H:%M:%S')}] Vote pour {PSEUDO}")
+    if TWOCAPTCHA_API_KEY:
+        print("  Mode: 2captcha (résolution humaine)")
+    else:
+        print("  Mode: OCR Tesseract (TWOCAPTCHA_API_KEY absent)")
+
     driver = get_driver()
     try:
         driver.get(VOTE_URL)
@@ -304,10 +381,9 @@ def vote():
                     time.sleep(2)
                     continue
 
-                captcha_text = ocr_captcha(iframe)
-                print(f"  OCR final: '{captcha_text}'")
+                captcha_text = read_captcha(iframe)
+                print(f"  Captcha lu: '{captcha_text}'")
 
-                # Seuil minimum 3 chars (captcha peut être court)
                 if len(captcha_text) < 3:
                     refresh_captcha_click(driver, iframe)
                     time.sleep(2)
@@ -316,28 +392,22 @@ def vote():
                 enter_pseudo(driver)
                 time.sleep(0.3)
 
-                token_before = get_mtcaptcha_token(driver)
-                print(f"  Token avant: '{token_before[:20]}...'" if token_before else "  Token avant: aucun")
+                before_values = snapshot_input_values(driver)
 
                 type_in_captcha_input(driver, iframe, captcha_text)
-                time.sleep(4)
+                time.sleep(5)  # Attendre validation serveur MTCaptcha
 
-                token_after = get_mtcaptcha_token(driver)
-                print(f"  Token après: '{token_after[:20]}...'" if token_after else "  Token après: aucun")
+                token = find_new_verified_token(driver, before_values)
 
-                iframe_ok = check_mtcaptcha_iframe_verified(driver, iframe)
-
-                captcha_valide = (token_after and token_after != token_before) or iframe_ok
-
-                if not captcha_valide:
-                    print("  Captcha non validé → refresh")
+                if not token:
+                    print("  Pas de token MTCaptcha validé → captcha faux, refresh")
                     iframe = get_mtcaptcha_iframe(driver)
                     if iframe:
                         refresh_captcha_click(driver, iframe)
                     time.sleep(2)
                     continue
 
-                print("  Captcha validé, soumission...")
+                print("  Token MTCaptcha validé, soumission...")
                 vote_button = driver.find_element(By.CSS_SELECTOR,
                     "button[type='submit'], input[type='submit']")
                 vote_button.click()
