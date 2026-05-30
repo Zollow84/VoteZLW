@@ -377,7 +377,7 @@ def login_velthar(driver):
 
 def click_voter_maintenant(driver):
     """Sur velthar.fr/vote, clique 'VOTER MAINTENANT' (déclenche l'état 'vote en cours' côté Velthar)
-    et amène sur serveur-prive (nouvel onglet)."""
+    et ouvre serveur-prive dans un NOUVEL onglet (l'onglet Velthar reste vivant)."""
     driver.get(f"{VELTHAR_URL}/vote")
     time.sleep(5)
     driver.save_screenshot("screenshot_velthar_avant_clic.png")
@@ -395,6 +395,11 @@ def click_voter_maintenant(driver):
         return False
 
     print(f"  Clic sur: '{target.text.strip()}'")
+    # Forcer l'ouverture dans un NOUVEL onglet pour garder la page Velthar vivante
+    try:
+        driver.execute_script("arguments[0].setAttribute('target', '_blank');", target)
+    except Exception:
+        pass
     try:
         driver.execute_script("arguments[0].click();", target)
     except Exception as e:
@@ -402,12 +407,14 @@ def click_voter_maintenant(driver):
         return False
     time.sleep(6)
 
-    # Si un nouvel onglet s'est ouvert (serveur-prive), basculer dessus
+    # Basculer sur le nouvel onglet serveur-prive (l'onglet Velthar reste vivant derrière)
     after = list(driver.window_handles)
     if len(after) > len(before):
         newh = [h for h in after if h not in before][0]
         driver.switch_to.window(newh)
-        print("  Nouvel onglet ouvert")
+        print("  Nouvel onglet serveur-prive ouvert (Velthar reste vivant)")
+    else:
+        print("  ATTENTION: pas de nouvel onglet, la page Velthar a peut-être été remplacée")
 
     print(f"  URL actuelle: {driver.current_url}")
 
@@ -529,12 +536,6 @@ def claim_velthar(driver, velthar_handle=None):
             print("  VOTE VÉRIFIÉ sur Velthar!")
             return True
 
-        # À mi-parcours, tenter UN rechargement au cas où l'état serait côté serveur
-        if essai == 5:
-            print("  (rechargement de secours...)")
-            driver.get(f"{VELTHAR_URL}/vote")
-            time.sleep(3)
-
         print("  Bouton VÉRIFIER pas encore là, attente 8s (sans recharger)...")
         time.sleep(8)
 
@@ -549,8 +550,8 @@ def vote():
     else:
         print("  Mode captcha: OCR Tesseract (TWOCAPTCHA_API_KEY absent)")
 
-    # Une seule session (avec proxy) : login Velthar -> clic VOTER MAINTENANT
-    # -> vote serveur-prive -> retour onglet Velthar (sans recharger) -> clic VÉRIFIER MON VOTE
+    # Une seule session (avec proxy) : login Velthar -> clic VOTER MAINTENANT (nouvel onglet)
+    # -> vote serveur-prive -> retour onglet Velthar (vivant, sans recharger) -> clic VÉRIFIER MON VOTE
     driver = get_driver(use_proxy=True)
     try:
         if PROXY_HOST:
@@ -585,7 +586,7 @@ def vote():
             print("Echec du vote serveur-prive")
             sys.exit(1)
 
-        # Revenir sur l'onglet Velthar d'origine (sans recharger) cliquer VÉRIFIER MON VOTE
+        # Revenir sur l'onglet Velthar d'origine (vivant) cliquer VÉRIFIER MON VOTE
         if velthar_flow:
             claim_velthar(driver, velthar_handle)
 
