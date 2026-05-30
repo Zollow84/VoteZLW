@@ -402,11 +402,12 @@ def click_voter_maintenant(driver):
         return False
     time.sleep(6)
 
+    # Si un nouvel onglet s'est ouvert (serveur-prive), basculer dessus
     after = list(driver.window_handles)
     if len(after) > len(before):
         newh = [h for h in after if h not in before][0]
         driver.switch_to.window(newh)
-        print("  Nouvel onglet serveur-prive ouvert")
+        print("  Nouvel onglet ouvert")
 
     print(f"  URL actuelle: {driver.current_url}")
 
@@ -496,19 +497,23 @@ def do_captcha_vote(driver):
 
 
 def claim_velthar(driver, velthar_handle=None):
-    """Revient sur l'onglet Velthar d'origine et clique 'VÉRIFIER MON VOTE'."""
+    """Revient sur l'onglet Velthar d'origine (SANS recharger) et clique 'VÉRIFIER MON VOTE'.
+    Le bouton est mis à jour côté JS après le clic 'VOTER MAINTENANT' : recharger l'effacerait."""
     print("\n--- Vérification Velthar (VÉRIFIER MON VOTE) ---")
     if velthar_handle and velthar_handle in driver.window_handles:
         driver.switch_to.window(velthar_handle)
-        print("  Retour sur l'onglet Velthar d'origine")
-    for essai in range(8):
+        print("  Retour sur l'onglet Velthar d'origine (sans recharger)")
+    else:
         driver.get(f"{VELTHAR_URL}/vote")
+        time.sleep(5)
+
+    for essai in range(10):
         time.sleep(5)
         driver.save_screenshot(f"screenshot_velthar_verif_{essai}.png")
 
         all_els = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit']")
         textes = [e.text.strip() for e in all_els if e.text.strip()]
-        print(f"  Essai {essai + 1}/8 - Boutons: {textes[:14]}")
+        print(f"  Essai {essai + 1}/10 - Boutons: {textes[:14]}")
 
         verif_btn = None
         for el in all_els:
@@ -524,10 +529,16 @@ def claim_velthar(driver, velthar_handle=None):
             print("  VOTE VÉRIFIÉ sur Velthar!")
             return True
 
-        print("  Bouton VÉRIFIER pas encore disponible, attente 15s...")
-        time.sleep(15)
+        # À mi-parcours, tenter UN rechargement au cas où l'état serait côté serveur
+        if essai == 5:
+            print("  (rechargement de secours...)")
+            driver.get(f"{VELTHAR_URL}/vote")
+            time.sleep(3)
 
-    print("  Bouton VÉRIFIER introuvable après 8 essais")
+        print("  Bouton VÉRIFIER pas encore là, attente 8s (sans recharger)...")
+        time.sleep(8)
+
+    print("  Bouton VÉRIFIER introuvable")
     return False
 
 
@@ -539,7 +550,7 @@ def vote():
         print("  Mode captcha: OCR Tesseract (TWOCAPTCHA_API_KEY absent)")
 
     # Une seule session (avec proxy) : login Velthar -> clic VOTER MAINTENANT
-    # -> vote serveur-prive -> retour onglet Velthar -> clic VÉRIFIER MON VOTE
+    # -> vote serveur-prive -> retour onglet Velthar (sans recharger) -> clic VÉRIFIER MON VOTE
     driver = get_driver(use_proxy=True)
     try:
         if PROXY_HOST:
@@ -574,7 +585,7 @@ def vote():
             print("Echec du vote serveur-prive")
             sys.exit(1)
 
-        # Revenir sur l'onglet Velthar d'origine cliquer VÉRIFIER MON VOTE (même session)
+        # Revenir sur l'onglet Velthar d'origine (sans recharger) cliquer VÉRIFIER MON VOTE
         if velthar_flow:
             claim_velthar(driver, velthar_handle)
 
