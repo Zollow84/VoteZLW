@@ -108,15 +108,26 @@ def verifier_vote(driver):
 
     print("\n--- Vérification du vote sur Velthar ---")
     try:
-        # Connexion
         driver.get(f"{VELTHAR_URL}/login")
         time.sleep(4)
         driver.save_screenshot("screenshot_velthar_login.png")
+        print(f"  Login page title: {driver.title}")
+        print(f"  Login URL: {driver.current_url}")
+
+        # Debug: liste tous les inputs
+        inputs = driver.find_elements(By.TAG_NAME, "input")
+        print(f"  {len(inputs)} input(s) trouvés:")
+        for inp in inputs:
+            t = inp.get_attribute("type") or ""
+            n = inp.get_attribute("name") or ""
+            p = inp.get_attribute("placeholder") or ""
+            print(f"    type='{t}' name='{n}' placeholder='{p}'")
 
         # Champ pseudo
         for sel in ["input[name='username']", "input[name='pseudo']",
                     "input[name='login']", "input[name='name']",
-                    "input[placeholder*='pseudo' i]", "input[placeholder*='username' i]"]:
+                    "input[placeholder*='pseudo' i]", "input[placeholder*='username' i]",
+                    "input[type='text']"]:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, sel)
                 if el and el.is_displayed():
@@ -128,40 +139,45 @@ def verifier_vote(driver):
                 continue
 
         # Champ mot de passe
-        pwd_field = driver.find_element(By.CSS_SELECTOR, "input[type='password']")
-        pwd_field.clear()
-        pwd_field.send_keys(VELTHAR_PASSWORD)
+        for sel in ["input[type='password']", "input[name='password']",
+                    "input[name='mdp']", "input[name='pwd']",
+                    "input[name='mot_de_passe']", "input[name='pass']"]:
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, sel)
+                if el:
+                    el.clear()
+                    el.send_keys(VELTHAR_PASSWORD)
+                    print(f"  Mot de passe entré ({sel})")
+                    break
+            except Exception:
+                continue
 
-        # Bouton connexion
-        submit = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
-        submit.click()
+        # Soumettre
+        for sel in ["button[type='submit']", "input[type='submit']", "button.btn-login", "button"]:
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, sel)
+                if el and el.is_displayed():
+                    el.click()
+                    break
+            except Exception:
+                continue
+
         time.sleep(4)
         driver.save_screenshot("screenshot_velthar_apres_login.png")
-        print(f"  Connecté, page: {driver.title}")
+        print(f"  Après login: {driver.title} | {driver.current_url}")
 
-        # Page de vote
         driver.get(f"{VELTHAR_URL}/vote")
         time.sleep(3)
         driver.save_screenshot("screenshot_velthar_vote.png")
 
-        # Cherche bouton "VÉRIFIER MON VOTE"
-        buttons = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit'], input[type='button']")
-        clicked = False
+        buttons = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit']")
         for btn in buttons:
             txt = (btn.text or btn.get_attribute("value") or "").lower()
             if "vérif" in txt or "verif" in txt:
                 btn.click()
                 time.sleep(3)
-                driver.save_screenshot("screenshot_velthar_verifie.png")
                 print("  VOTE VÉRIFIÉ sur Velthar!")
-                clicked = True
                 break
-
-        if not clicked:
-            print("  Bouton vérification introuvable")
-            # Affiche tous les boutons pour debug
-            for btn in buttons[:10]:
-                print(f"    btn: '{btn.text[:50]}'")
 
     except Exception as e:
         print(f"  Erreur vérification: {e}")
@@ -239,7 +255,6 @@ def vote():
             print("Echec apres 6 tentatives")
             sys.exit(1)
 
-        # Vérifier le vote sur Velthar
         verifier_vote(driver)
 
     finally:
