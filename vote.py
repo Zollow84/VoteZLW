@@ -346,6 +346,7 @@ def verifier_vote(driver):
         return
     print("\n--- Vérification Velthar ---")
     try:
+        # Connexion à Velthar
         driver.get("https://velthar.fr/auth/login")
         time.sleep(4)
 
@@ -380,25 +381,36 @@ def verifier_vote(driver):
 
         time.sleep(4)
         print(f"  Login: {driver.current_url}")
-        print("  Attente 20s...")
-        time.sleep(20)
 
-        driver.get(f"{VELTHAR_URL}/vote")
-        time.sleep(5)
-        driver.save_screenshot("screenshot_velthar_vote.png")
+        # Boucle : attendre que Velthar détecte le vote serveur-prive,
+        # puis cliquer sur "VÉRIFIER MON VOTE"
+        for essai in range(8):
+            driver.get(f"{VELTHAR_URL}/vote")
+            time.sleep(5)
+            driver.save_screenshot(f"screenshot_velthar_verif_{essai}.png")
 
-        all_btns = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit']")
-        print(f"  Boutons: {[b.text.strip() for b in all_btns if b.text.strip()][:10]}")
+            all_els = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit']")
+            textes = [e.text.strip() for e in all_els if e.text.strip()]
+            print(f"  Essai {essai + 1}/8 - Boutons: {textes[:12]}")
 
-        for btn in all_btns:
-            txt = (btn.text or "").strip().upper()
-            if "VERIF" in txt or "VÉRIF" in txt:
-                driver.execute_script("arguments[0].click();", btn)
-                time.sleep(3)
-                print("  VOTE VÉRIFIÉ!")
+            verif_btn = None
+            for el in all_els:
+                txt = (el.text or "").strip().upper()
+                if "VERIF" in txt or "VÉRIF" in txt:
+                    verif_btn = el
+                    break
+
+            if verif_btn:
+                driver.execute_script("arguments[0].click();", verif_btn)
+                time.sleep(4)
+                driver.save_screenshot("screenshot_velthar_verifie.png")
+                print("  VOTE VÉRIFIÉ sur Velthar!")
                 return
 
-        print("  Bouton VÉRIFIER introuvable")
+            print(f"  Bouton VÉRIFIER pas encore disponible, attente 15s...")
+            time.sleep(15)
+
+        print("  Bouton VÉRIFIER introuvable après 8 essais")
     except Exception as e:
         print(f"  Erreur: {e}")
 
