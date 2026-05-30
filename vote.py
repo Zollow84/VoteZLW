@@ -268,25 +268,45 @@ def vote():
 
                 enter_pseudo(driver)
                 time.sleep(0.3)
+
+                # Lire le token AVANT de taper
+                token_before = ""
+                try:
+                    for el in driver.find_elements(By.CSS_SELECTOR,
+                            "input[name='captcha'], input[id='captcha'], input[type='hidden']"):
+                        v = el.get_attribute('value') or ''
+                        if len(v) > 5:
+                            token_before = v
+                            break
+                except Exception:
+                    pass
+                print(f"  Token avant: '{token_before[:20]}...'" if token_before else "  Token avant: aucun")
+
                 type_in_captcha_input(driver, iframe, captcha_text)
                 time.sleep(4)  # Attendre validation serveur MTCaptcha
 
-                # Vérifier le token MTCaptcha
-                token_found = False
+                # Vérifier que le token a CHANGÉ (nouvelle validation MTCaptcha)
+                token_after = ""
                 try:
-                    token_els = driver.find_elements(By.CSS_SELECTOR,
-                        "input[name='captcha'], input[id='captcha'], input[type='hidden']")
-                    for el in token_els:
-                        val = el.get_attribute('value') or ''
-                        if len(val) > 5:
-                            print(f"  Token captcha: '{val[:30]}...'")
-                            token_found = True
+                    for el in driver.find_elements(By.CSS_SELECTOR,
+                            "input[name='captcha'], input[id='captcha'], input[type='hidden']"):
+                        v = el.get_attribute('value') or ''
+                        if len(v) > 5:
+                            token_after = v
                             break
-                    if not token_found:
-                        print("  Pas de token captcha détecté")
                 except Exception:
                     pass
+                print(f"  Token après: '{token_after[:20]}...'" if token_after else "  Token après: aucun")
 
+                if not token_after or token_after == token_before:
+                    print("  Token non renouvelé → captcha invalide, refresh")
+                    iframe = get_mtcaptcha_iframe(driver)
+                    if iframe:
+                        refresh_captcha_click(driver, iframe)
+                    time.sleep(2)
+                    continue
+
+                print(f"  Nouveau token OK, soumission...")
                 vote_button = driver.find_element(By.CSS_SELECTOR,
                     "button[type='submit'], input[type='submit']")
                 vote_button.click()
