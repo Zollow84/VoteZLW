@@ -77,18 +77,12 @@ def get_driver(use_proxy=True):
     if version:
         print(f"  Chrome version: {version}")
 
-    # velthar.fr contourne le proxy (pas besoin, et ça économise la bande passante) :
-    # SEUL serveur-prive.net passe par le proxy.
-    bypass = "*.velthar.fr;velthar.fr;localhost;127.0.0.1"
-
     if use_proxy and PROXY_HOST and PROXY_PORT and PROXY_USER:
         start_local_proxy()
         options.add_argument(f"--proxy-server=http://127.0.0.1:{LOCAL_PROXY_PORT}")
-        options.add_argument(f"--proxy-bypass-list={bypass}")
-        print("  Proxy actif (Velthar en direct, seul serveur-prive consomme la bande passante)")
+        print("  Proxy actif (serveur-prive)")
     elif use_proxy and PROXY_HOST and PROXY_PORT:
         options.add_argument(f"--proxy-server=http://{PROXY_HOST}:{PROXY_PORT}")
-        options.add_argument(f"--proxy-bypass-list={bypass}")
         print(f"  Proxy: {PROXY_HOST}:{PROXY_PORT}")
     elif not use_proxy:
         print("  (connexion directe, sans proxy)")
@@ -382,44 +376,6 @@ def login_velthar(driver):
     print(f"  Login Velthar: {driver.current_url}")
 
 
-def click_voter_maintenant(driver):
-    """Déclenche l'action Livewire selectWebsite (serveur-prive) SANS naviguer (garde Velthar vivant),
-    puis ouvre serveur-prive dans un onglet séparé pour voter."""
-    driver.get(f"{VELTHAR_URL}/vote")
-    time.sleep(5)
-    driver.save_screenshot("screenshot_velthar_avant_clic.png")
-
-    clicked = driver.execute_script("""
-        var els = document.querySelectorAll('div, a, button');
-        for (var i = 0; i < els.length; i++) {
-            var w = els[i].getAttribute('wire:click');
-            if (!w) continue;
-            var a = els[i].closest('a');
-            var href = a ? (a.getAttribute('href') || '') : '';
-            if (href.indexOf('serveur-prive') !== -1) {
-                if (a) { a.removeAttribute('href'); a.removeAttribute('target'); }
-                els[i].click();
-                return w + ' | ' + href;
-            }
-        }
-        return null;
-    """)
-    print(f"  Livewire selectWebsite déclenché: {clicked}")
-    if not clicked:
-        print("  wire:click serveur-prive introuvable")
-
-    time.sleep(6)  # laisser Livewire mettre à jour la page (-> VÉRIFIER MON VOTE)
-    driver.save_screenshot("screenshot_velthar_apres_select.png")
-
-    # Ouvrir serveur-prive dans un NOUVEL onglet via l'API Selenium fiable
-    # (NE touche PAS l'onglet Velthar qui reste vivant avec son bouton VÉRIFIER MON VOTE)
-    driver.switch_to.new_window('tab')
-    driver.get(VOTE_URL)
-    time.sleep(3)
-    print(f"  Onglet serveur-prive (nouveau): {driver.current_url}")
-    return True
-
-
 def do_captcha_vote(driver):
     """Effectue le vote sur serveur-prive. Retourne 'ok', 'already' ou 'fail'."""
     enter_pseudo(driver)
@@ -499,12 +455,12 @@ def do_captcha_vote(driver):
 
 
 def claim_velthar(driver, velthar_handle=None):
-    """Revient sur l'onglet Velthar VIVANT, accepte les cookies, et fait un VRAI clic sur 'VÉRIFIER MON VOTE'.
+    """Sur l'onglet Velthar VIVANT, accepte les cookies, et fait un VRAI clic sur 'VÉRIFIER MON VOTE'.
     Succès confirmé uniquement si le compteur de votes augmente."""
     print("\n--- Vérification Velthar (VÉRIFIER MON VOTE) ---")
     if velthar_handle and velthar_handle in driver.window_handles:
         driver.switch_to.window(velthar_handle)
-        print("  Retour sur l'onglet Velthar vivant (sans recharger)")
+        print("  Sur l'onglet Velthar vivant (sans recharger)")
     else:
         driver.get(f"{VELTHAR_URL}/vote")
         time.sleep(5)
@@ -518,7 +474,6 @@ def claim_velthar(driver, velthar_handle=None):
             return None
 
     def accepter_cookies():
-        """Le site exige l'acceptation des cookies pour fonctionner."""
         try:
             for el in driver.find_elements(By.CSS_SELECTOR, "button, a"):
                 if (el.text or "").strip().lower() in ("accepter", "j'accepte", "accept"):
@@ -533,7 +488,6 @@ def claim_velthar(driver, velthar_handle=None):
             pass
 
     def clic_reel_verifier():
-        """Trouve le bouton VÉRIFIER et fait un VRAI clic (Selenium) dessus."""
         el = None
         for e in driver.find_elements(By.CSS_SELECTOR, "a, button, div"):
             try:
@@ -570,20 +524,6 @@ def claim_velthar(driver, velthar_handle=None):
     count_before = get_vote_count()
     print(f"  Votes avant: {count_before}")
 
-    info = driver.execute_script("""
-        var els = document.querySelectorAll('div, a, button');
-        for (var i=0;i<els.length;i++){
-            var t=(els[i].innerText||'').toUpperCase();
-            if((t.indexOf('VERIF')!==-1 || t.indexOf('VÉRIF')!==-1) && t.length<40){
-                var attrs=[];
-                for(var j=0;j<els[i].attributes.length;j++){attrs.push(els[i].attributes[j].name+'='+els[i].attributes[j].value);}
-                return els[i].tagName+' :: '+attrs.join(' ')+' :: '+els[i].outerHTML.substring(0,220);
-            }
-        }
-        return null;
-    """)
-    print(f"  [diag] VÉRIFIER élément: {info}")
-
     for essai in range(8):
         accepter_cookies()
         clicked = clic_reel_verifier()
@@ -615,85 +555,107 @@ def vote():
     else:
         print("  Mode captcha: OCR Tesseract (TWOCAPTCHA_API_KEY absent)")
 
-    # PRÉ-CHECK COOLDOWN SANS PROXY (économise la bande passante Webshare) :
-    if VELTHAR_PASSWORD:
-        chk = get_driver(use_proxy=False)
+    # Sans compte Velthar : vote simple sur serveur-prive (proxy)
+    if not VELTHAR_PASSWORD:
+        driver = get_driver(use_proxy=True)
         try:
-            login_velthar(chk)
-            chk.get(f"{VELTHAR_URL}/vote")
-            time.sleep(4)
-            body = chk.find_element(By.TAG_NAME, "body").text.lower()
-            if "prochain vote" in body:
-                m = re.search(r"prochain vote[^\d]{0,8}(\d{1,2}[:h]\d{2}(?::\d{2})?)", body)
-                quand = m.group(1) if m else "?"
-                print(f"  ⏳ Cooldown actif — prochain vote à {quand}. Sortie (proxy non utilisé).")
-                return
-            print("  ✅ Cooldown fini → on vote maintenant !")
-        except Exception as e:
-            print(f"  Pré-check erreur réseau/SSL: {e} — on saute ce run, retry au prochain.")
-            return
-        finally:
-            try:
-                chk.quit()
-            except Exception:
-                pass
-
-    # Flux de vote AVEC proxy (Velthar en direct via bypass, serveur-prive via proxy),
-    # avec retries sur erreurs transitoires.
-    for tentative in range(3):
-        driver = None
-        try:
-            driver = get_driver(use_proxy=True)
-            if PROXY_HOST:
-                check_ip(driver)
-
-            velthar_flow = bool(VELTHAR_PASSWORD)
-
-            velthar_handle = None
-            if velthar_flow:
-                print("\n=== Connexion Velthar + Livewire selectWebsite ===")
-                login_velthar(driver)
-                velthar_handle = driver.current_window_handle
-                if not click_voter_maintenant(driver):
-                    print("  Fallback: navigation directe serveur-prive")
-                    driver.get(VOTE_URL)
-            else:
-                driver.get(VOTE_URL)
-
-            print("\n=== Vote serveur-prive ===")
+            driver.get(VOTE_URL)
             time.sleep(8)
-            driver.save_screenshot("screenshot_page.png")
-            print(f"  Title: {driver.title}")
-
-            if "just a moment" in driver.title.lower():
-                print("  Cloudflare, attente...")
-                time.sleep(10)
-
-            result = do_captcha_vote(driver)
-            print(f"  Résultat serveur-prive: {result}")
-
-            if result == "fail":
-                print("Echec du vote serveur-prive (retry au prochain run)")
-                return
-
-            if velthar_flow:
-                claim_velthar(driver, velthar_handle)
-
-            return  # succès
-
-        except Exception as e:
-            print(f"  ⚠️ Tentative {tentative + 1}/3 échouée (erreur transitoire proxy/SSL): {e}")
+            do_captcha_vote(driver)
         finally:
             try:
-                if driver:
-                    driver.quit()
+                driver.quit()
             except Exception:
                 pass
             stop_local_proxy()
+        return
 
-        time.sleep(3)
+    # ===== NAVIGATEUR VELTHAR : SANS PROXY (fiable + 0 bande passante proxy) =====
+    dv = get_driver(use_proxy=False)
+    velthar_handle = None
+    try:
+        print("\n=== Connexion Velthar (sans proxy) ===")
+        login_velthar(dv)
+        dv.get(f"{VELTHAR_URL}/vote")
+        time.sleep(4)
 
-    print("  Échec après 3 tentatives proxy — retry au prochain run.")
+        # Pré-check cooldown
+        try:
+            body = dv.find_element(By.TAG_NAME, "body").text.lower()
+        except Exception:
+            body = ""
+        if "prochain vote" in body:
+            m = re.search(r"prochain vote[^\d]{0,8}(\d{1,2}[:h]\d{2}(?::\d{2})?)", body)
+            print(f"  ⏳ Cooldown actif — prochain vote à {m.group(1) if m else '?'}. Sortie.")
+            return
+
+        # selectWebsite (Livewire) SANS naviguer -> Velthar passe à l'état VÉRIFIER MON VOTE
+        clicked = dv.execute_script("""
+            var els = document.querySelectorAll('div, a, button');
+            for (var i = 0; i < els.length; i++) {
+                var w = els[i].getAttribute('wire:click');
+                if (!w) continue;
+                var a = els[i].closest('a');
+                var href = a ? (a.getAttribute('href') || '') : '';
+                if (href.indexOf('serveur-prive') !== -1) {
+                    if (a) { a.removeAttribute('href'); a.removeAttribute('target'); }
+                    els[i].click();
+                    return w;
+                }
+            }
+            return null;
+        """)
+        print(f"  Livewire selectWebsite déclenché: {clicked}")
+        time.sleep(5)
+        dv.save_screenshot("screenshot_velthar_apres_select.png")
+        velthar_handle = dv.current_window_handle
+
+        # ===== NAVIGATEUR SERVEUR-PRIVE : AVEC PROXY (seul consommateur de bande passante) =====
+        print("\n=== Vote serveur-prive (proxy) ===")
+        result = "fail"
+        for tentative in range(3):
+            ds = None
+            try:
+                ds = get_driver(use_proxy=True)
+                if PROXY_HOST:
+                    check_ip(ds)
+                ds.get(VOTE_URL)
+                time.sleep(8)
+                ds.save_screenshot("screenshot_page.png")
+                print(f"  Title: {ds.title}")
+                if "just a moment" in ds.title.lower():
+                    print("  Cloudflare, attente...")
+                    time.sleep(10)
+                result = do_captcha_vote(ds)
+                print(f"  Résultat serveur-prive: {result}")
+                if result in ("ok", "already"):
+                    break
+            except Exception as e:
+                print(f"  ⚠️ Tentative {tentative + 1}/3 serveur-prive échouée: {e}")
+            finally:
+                try:
+                    if ds:
+                        ds.quit()
+                except Exception:
+                    pass
+                stop_local_proxy()
+            time.sleep(3)
+
+        if result == "fail":
+            print("Vote serveur-prive échoué — retry au prochain run.")
+            return
+
+        # ===== RETOUR NAVIGATEUR VELTHAR : cliquer VÉRIFIER MON VOTE =====
+        claim_velthar(dv, velthar_handle)
+
+    except Exception as e:
+        print(f"  Erreur Velthar non bloquante: {e}")
+    finally:
+        try:
+            dv.quit()
+        except Exception:
+            pass
+        stop_local_proxy()
 
 
 # Le run ne doit JAMAIS planter (sinon GitHub envoie un mail d'échec).
