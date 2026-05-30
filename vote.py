@@ -110,12 +110,10 @@ def verifier_vote(driver):
     try:
         driver.get("https://velthar.fr/auth/login")
         time.sleep(4)
-        driver.save_screenshot("screenshot_velthar_login.png")
         print(f"  Login page title: {driver.title}")
 
-        # Champ pseudo
-        for sel in ["input[name='name']", "input[name='username']", "input[name='pseudo']",
-                    "input[name='login']", "input[type='text']"]:
+        for sel in ["input[name='name']", "input[name='username']",
+                    "input[name='pseudo']", "input[type='text']"]:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, sel)
                 if el and el.is_displayed():
@@ -126,7 +124,6 @@ def verifier_vote(driver):
             except Exception:
                 continue
 
-        # Champ mot de passe
         for sel in ["input[type='password']", "input[name='password']",
                     "input[name='mdp']", "input[name='pwd']"]:
             try:
@@ -139,7 +136,6 @@ def verifier_vote(driver):
             except Exception:
                 continue
 
-        # Soumettre
         for sel in ["button[type='submit']", "input[type='submit']", "button"]:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, sel)
@@ -152,7 +148,6 @@ def verifier_vote(driver):
         time.sleep(4)
         print(f"  Après login: {driver.title} | {driver.current_url}")
 
-        # Attendre que Velthar détecte le vote
         print("  Attente 20s pour que Velthar détecte le vote...")
         time.sleep(20)
 
@@ -160,7 +155,6 @@ def verifier_vote(driver):
         time.sleep(5)
         driver.save_screenshot("screenshot_velthar_vote.png")
 
-        # Debug: liste tous les boutons
         all_btns = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit'], div[onclick]")
         print(f"  {len(all_btns)} bouton(s) sur la page:")
         for btn in all_btns[:15]:
@@ -168,7 +162,6 @@ def verifier_vote(driver):
             if txt:
                 print(f"    '{txt}'")
 
-        # Cherche VÉRIFIER MON VOTE
         clicked = False
         for btn in all_btns:
             txt = (btn.text or btn.get_attribute("value") or "").strip().upper()
@@ -243,12 +236,21 @@ def vote():
                 vote_button.click()
                 time.sleep(4)
 
+                driver.save_screenshot("screenshot_apres_vote.png")
                 page = driver.page_source.lower()
-                if any(w in page for w in ["succès", "success", "voté", "merci", "vote validé"]):
+
+                # Extrait debug
+                for keyword in ["validé", "valide", "erreur", "incorrect", "wrong"]:
+                    idx = page.find(keyword)
+                    if idx >= 0:
+                        print(f"  Trouvé '{keyword}': ...{page[max(0,idx-30):idx+60]}...")
+
+                if any(w in page for w in ["vote validé", "vote valide", "votre vote a"]):
                     print("VOTE REUSSI sur serveur-prive.net!")
                     success = True
                     break
                 else:
+                    print("  Vote non confirmé, retry...")
                     iframe = get_mtcaptcha_iframe(driver)
                     if iframe:
                         refresh_captcha_click(driver, iframe)
