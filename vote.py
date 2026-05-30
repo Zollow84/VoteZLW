@@ -76,11 +76,9 @@ def get_driver():
         print(f"  Chrome version: {version}")
 
     if PROXY_HOST and PROXY_PORT and PROXY_USER:
-        # Proxy authentifié via relais local pproxy
         start_local_proxy()
         options.add_argument(f"--proxy-server=http://127.0.0.1:{LOCAL_PROXY_PORT}")
     elif PROXY_HOST and PROXY_PORT:
-        # Proxy sans authentification
         options.add_argument(f"--proxy-server=http://{PROXY_HOST}:{PROXY_PORT}")
         print(f"  Proxy: {PROXY_HOST}:{PROXY_PORT}")
 
@@ -107,11 +105,9 @@ def prepare_captcha_images(iframe):
     w, h = full_img.size
     print(f"  Iframe: {w}x{h}px")
 
-    # Crop sur la zone du texte (exclure "Vérifié avec" en bas)
     crop = full_img.crop((int(w * 0.33), 2, int(w * 0.87), int(h * 0.62)))
     crop.save("screenshot_captcha_crop.png")
 
-    # Image propre agrandie pour 2captcha (humain) - pas de binarisation
     clean = crop.convert("RGB").resize((crop.width * 4, crop.height * 4), Image.LANCZOS)
     clean = ImageEnhance.Contrast(clean).enhance(1.5)
     clean.save(CAPTCHA_2CAPTCHA_IMG)
@@ -133,7 +129,7 @@ def solve_with_2captcha(image_path):
             "body": b64,
             "json": 1,
             "phrase": 0,
-            "case": 1,        # sensible à la casse (majuscules/minuscules)
+            "case": 1,
             "numeric": 0,
             "min_len": 3,
             "max_len": 8,
@@ -224,7 +220,6 @@ def get_mtcaptcha_iframe(driver):
 
 
 def snapshot_input_values(driver):
-    """Capture toutes les valeurs des inputs (pour détecter un nouveau token après)."""
     values = set()
     try:
         for el in driver.find_elements(By.TAG_NAME, "input"):
@@ -240,8 +235,6 @@ def snapshot_input_values(driver):
 
 
 def find_new_verified_token(driver, before_values):
-    """Cherche le vrai token MTCaptcha : une nouvelle valeur longue apparue après validation."""
-    # 1) API JS officielle
     for js in [
         "return window.mtcaptcha ? window.mtcaptcha.getVerifiedToken() : null",
         "return typeof mtcaptcha !== 'undefined' ? mtcaptcha.getVerifiedToken() : null",
@@ -254,13 +247,11 @@ def find_new_verified_token(driver, before_values):
         except Exception:
             pass
 
-    # 2) Nouvel input apparu (le verified-token MTCaptcha est ajouté au form après succès)
     try:
         for el in driver.find_elements(By.TAG_NAME, "input"):
             try:
                 name = el.get_attribute('name') or ''
                 val  = el.get_attribute('value') or ''
-                # ignorer le CSRF Laravel (_token) et les valeurs déjà présentes avant
                 if name == '_token':
                     continue
                 if len(val) > 20 and val not in before_values:
@@ -341,78 +332,202 @@ def refresh_captcha_click(driver, iframe):
     time.sleep(2)
 
 
-def verifier_vote(driver):
-    if not VELTHAR_PASSWORD:
-        return
-    print("\n--- Vérification Velthar ---")
+def login_velthar(driver):
+    """Se connecte au compte Velthar."""
+    print("--- Connexion Velthar ---")
+    driver.get("https://velthar.fr/auth/login")
+    time.sleep(4)
+
+    for sel in ["input[name='name']", "input[name='username']", "input[type='text']"]:
+        try:
+            el = driver.find_element(By.CSS_SELECTOR, sel)
+            if el and el.is_displayed():
+                el.clear()
+                el.send_keys(PSEUDO)
+                break
+        except Exception:
+            continue
+
+    for sel in ["input[type='password']", "input[name='password']"]:
+        try:
+            el = driver.find_element(By.CSS_SELECTOR, sel)
+            if el:
+                el.clear()
+                el.send_keys(VELTHAR_PASSWORD)
+                break
+        except Exception:
+            continue
+
+    for sel in ["button[type='submit']", "button"]:
+        try:
+            el = driver.find_element(By.CSS_SELECTOR, sel)
+            if el and el.is_displayed():
+                el.click()
+                break
+        except Exception:
+            continue
+
+    time.sleep(4)
+    print(f"  Login Velthar: {driver.current_url}")
+
+
+def open_serveurprive_from_velthar(driver):
+    """Sur velthar.fr/vote, clique 'VOTER MAINTENANT' pour ouvrir serveur-prive (parcours de suivi)."""
+    driver.get(f"{VELTHAR_URL}/vote")
+    time.sleep(5)
+    before = list(driver.window_handles)
+
+    target = None
+    for el in driver.find_elements(By.CSS_SELECTOR, "a, button"):
+        txt = (el.text or "").strip().upper()
+        if "VOTER MAINTENANT" in txt:
+            target = el
+            break
+    if not target:
+        for el in driver.find_elements(By.CSS_SELECTOR, "a, button"):
+            txt = (el.text or "").strip().upper()
+            if "JE VOTE" in txt:
+                target = el
+                break
+
+    if not target:
+        print("  Bouton 'VOTER MAINTENANT' introuvable sur Velthar")
+        return False
+
+    print(f"  Clic sur: '{target.text.strip()}'")
     try:
-        # Connexion à Velthar
-        driver.get("https://velthar.fr/auth/login")
-        time.sleep(4)
-
-        for sel in ["input[name='name']", "input[name='username']", "input[type='text']"]:
-            try:
-                el = driver.find_element(By.CSS_SELECTOR, sel)
-                if el and el.is_displayed():
-                    el.clear()
-                    el.send_keys(PSEUDO)
-                    break
-            except Exception:
-                continue
-
-        for sel in ["input[type='password']", "input[name='password']"]:
-            try:
-                el = driver.find_element(By.CSS_SELECTOR, sel)
-                if el:
-                    el.clear()
-                    el.send_keys(VELTHAR_PASSWORD)
-                    break
-            except Exception:
-                continue
-
-        for sel in ["button[type='submit']", "button"]:
-            try:
-                el = driver.find_element(By.CSS_SELECTOR, sel)
-                if el and el.is_displayed():
-                    el.click()
-                    break
-            except Exception:
-                continue
-
-        time.sleep(4)
-        print(f"  Login: {driver.current_url}")
-
-        # Boucle : attendre que Velthar détecte le vote serveur-prive,
-        # puis cliquer sur "VÉRIFIER MON VOTE"
-        for essai in range(8):
-            driver.get(f"{VELTHAR_URL}/vote")
-            time.sleep(5)
-            driver.save_screenshot(f"screenshot_velthar_verif_{essai}.png")
-
-            all_els = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit']")
-            textes = [e.text.strip() for e in all_els if e.text.strip()]
-            print(f"  Essai {essai + 1}/8 - Boutons: {textes[:12]}")
-
-            verif_btn = None
-            for el in all_els:
-                txt = (el.text or "").strip().upper()
-                if "VERIF" in txt or "VÉRIF" in txt:
-                    verif_btn = el
-                    break
-
-            if verif_btn:
-                driver.execute_script("arguments[0].click();", verif_btn)
-                time.sleep(4)
-                driver.save_screenshot("screenshot_velthar_verifie.png")
-                print("  VOTE VÉRIFIÉ sur Velthar!")
-                return
-
-            print(f"  Bouton VÉRIFIER pas encore disponible, attente 15s...")
-            time.sleep(15)
-
-        print("  Bouton VÉRIFIER introuvable après 8 essais")
+        driver.execute_script("arguments[0].click();", target)
     except Exception as e:
-        print(f"  Erreur: {e}")
+        print(f"  Erreur clic: {e}")
+        return False
+    time.sleep(5)
+
+    # Si un nouvel onglet s'est ouvert, basculer dessus
+    after = list(driver.window_handles)
+    if len(after) > len(before):
+        newh = [h for h in after if h not in before][0]
+        driver.switch_to.window(newh)
+        print("  Nouvel onglet serveur-prive ouvert")
+
+    print(f"  URL actuelle: {driver.current_url}")
+
+    # Sécurité : si on n'est pas sur serveur-prive, y aller directement
+    if "serveur-prive" not in (driver.current_url or ""):
+        print("  Pas sur serveur-prive → navigation directe")
+        driver.get(VOTE_URL)
+        time.sleep(3)
+    return True
+
+
+def do_captcha_vote(driver):
+    """Effectue le vote sur serveur-prive. Retourne 'ok', 'already' ou 'fail'."""
+    enter_pseudo(driver)
+    time.sleep(5)
+
+    for attempt in range(6):
+        print(f"Tentative #{attempt + 1}/6")
+        try:
+            iframe = get_mtcaptcha_iframe(driver)
+            if not iframe:
+                print("  Iframe introuvable")
+                time.sleep(2)
+                continue
+
+            captcha_text = read_captcha(iframe)
+            print(f"  Captcha lu: '{captcha_text}'")
+
+            if len(captcha_text) < 3:
+                refresh_captcha_click(driver, iframe)
+                time.sleep(2)
+                continue
+
+            enter_pseudo(driver)
+            time.sleep(0.3)
+
+            before_values = snapshot_input_values(driver)
+
+            type_in_captcha_input(driver, iframe, captcha_text)
+            time.sleep(5)
+
+            token = find_new_verified_token(driver, before_values)
+
+            if not token:
+                print("  Pas de token MTCaptcha validé → captcha faux, refresh")
+                iframe = get_mtcaptcha_iframe(driver)
+                if iframe:
+                    refresh_captcha_click(driver, iframe)
+                time.sleep(2)
+                continue
+
+            print("  Token MTCaptcha validé, soumission...")
+            vote_button = driver.find_element(By.CSS_SELECTOR,
+                "button[type='submit'], input[type='submit']")
+            vote_button.click()
+            time.sleep(4)
+
+            driver.save_screenshot(f"screenshot_apres_vote_{attempt}.png")
+            page = driver.page_source.lower()
+
+            for kw in ["validé", "valide", "erreur", "captcha", "ip"]:
+                idx = page.find(kw)
+                if idx >= 0:
+                    print(f"  '{kw}': ...{page[max(0,idx-20):idx+80]}...")
+
+            if any(w in page for w in ["vote validé", "vote valide", "votre vote a"]):
+                print("VOTE REUSSI!")
+                return "ok"
+            elif "déjà voté" in page or "deja vote" in page:
+                print("  Déjà voté sur serveur-prive (cooldown)")
+                return "already"
+            elif "ip n'est pas autorisée" in page or "ip n est pas autorisee" in page:
+                print("  ERREUR IP : l'IP n'est pas autorisée à voter")
+                return "fail"
+            else:
+                print("  Non confirmé, refresh...")
+                iframe = get_mtcaptcha_iframe(driver)
+                if iframe:
+                    refresh_captcha_click(driver, iframe)
+                time.sleep(2)
+
+        except Exception as e:
+            print(f"  Erreur: {e}")
+            driver.switch_to.default_content()
+            time.sleep(1)
+
+    return "fail"
+
+
+def claim_velthar(driver):
+    """Revient sur Velthar et clique 'VÉRIFIER MON VOTE'."""
+    print("\n--- Vérification Velthar (VÉRIFIER MON VOTE) ---")
+    for essai in range(8):
+        driver.get(f"{VELTHAR_URL}/vote")
+        time.sleep(5)
+        driver.save_screenshot(f"screenshot_velthar_verif_{essai}.png")
+
+        all_els = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit']")
+        textes = [e.text.strip() for e in all_els if e.text.strip()]
+        print(f"  Essai {essai + 1}/8 - Boutons: {textes[:14]}")
+
+        verif_btn = None
+        for el in all_els:
+            txt = (el.text or "").strip().upper()
+            if "VERIF" in txt or "VÉRIF" in txt:
+                verif_btn = el
+                break
+
+        if verif_btn:
+            driver.execute_script("arguments[0].click();", verif_btn)
+            time.sleep(4)
+            driver.save_screenshot("screenshot_velthar_verifie.png")
+            print("  VOTE VÉRIFIÉ sur Velthar!")
+            return True
+
+        print("  Bouton VÉRIFIER pas encore disponible, attente 15s...")
+        time.sleep(15)
+
+    print("  Bouton VÉRIFIER introuvable après 8 essais")
+    return False
 
 
 def vote():
@@ -424,11 +539,20 @@ def vote():
 
     driver = get_driver()
     try:
-        # Vérifier l'IP de sortie (proxy)
         if PROXY_HOST:
             check_ip(driver)
 
-        driver.get(VOTE_URL)
+        velthar_flow = bool(VELTHAR_PASSWORD)
+
+        if velthar_flow:
+            # Parcours complet : Velthar -> serveur-prive -> retour Velthar
+            login_velthar(driver)
+            if not open_serveurprive_from_velthar(driver):
+                print("  Fallback: navigation directe serveur-prive")
+                driver.get(VOTE_URL)
+        else:
+            driver.get(VOTE_URL)
+
         time.sleep(8)
         driver.save_screenshot("screenshot_page.png")
         print(f"  Title: {driver.title}")
@@ -437,88 +561,17 @@ def vote():
             print("  Cloudflare, attente...")
             time.sleep(10)
 
-        enter_pseudo(driver)
-        time.sleep(5)
+        result = do_captcha_vote(driver)
+        print(f"  Résultat serveur-prive: {result}")
 
-        success = False
-        for attempt in range(6):
-            print(f"Tentative #{attempt + 1}/6")
-            try:
-                iframe = get_mtcaptcha_iframe(driver)
-                if not iframe:
-                    print("  Iframe introuvable")
-                    time.sleep(2)
-                    continue
-
-                captcha_text = read_captcha(iframe)
-                print(f"  Captcha lu: '{captcha_text}'")
-
-                if len(captcha_text) < 3:
-                    refresh_captcha_click(driver, iframe)
-                    time.sleep(2)
-                    continue
-
-                enter_pseudo(driver)
-                time.sleep(0.3)
-
-                before_values = snapshot_input_values(driver)
-
-                type_in_captcha_input(driver, iframe, captcha_text)
-                time.sleep(5)  # Attendre validation serveur MTCaptcha
-
-                token = find_new_verified_token(driver, before_values)
-
-                if not token:
-                    print("  Pas de token MTCaptcha validé → captcha faux, refresh")
-                    iframe = get_mtcaptcha_iframe(driver)
-                    if iframe:
-                        refresh_captcha_click(driver, iframe)
-                    time.sleep(2)
-                    continue
-
-                print("  Token MTCaptcha validé, soumission...")
-                vote_button = driver.find_element(By.CSS_SELECTOR,
-                    "button[type='submit'], input[type='submit']")
-                vote_button.click()
-                time.sleep(4)
-
-                driver.save_screenshot(f"screenshot_apres_vote_{attempt}.png")
-                page = driver.page_source.lower()
-
-                for kw in ["validé", "valide", "erreur", "captcha", "ip"]:
-                    idx = page.find(kw)
-                    if idx >= 0:
-                        print(f"  '{kw}': ...{page[max(0,idx-20):idx+80]}...")
-
-                if any(w in page for w in ["vote validé", "vote valide", "votre vote a"]):
-                    print("VOTE REUSSI!")
-                    success = True
-                    break
-                elif "déjà voté" in page or "deja vote" in page:
-                    print("  Déjà voté sur serveur-prive (cooldown) → passage à la vérification Velthar")
-                    success = True
-                    break
-                elif "ip n'est pas autorisée" in page or "ip n est pas autorisee" in page:
-                    print("  ERREUR IP : l'IP n'est pas autorisée à voter (proxy bloqué ou cooldown)")
-                    break
-                else:
-                    print("  Non confirmé, refresh...")
-                    iframe = get_mtcaptcha_iframe(driver)
-                    if iframe:
-                        refresh_captcha_click(driver, iframe)
-                    time.sleep(2)
-
-            except Exception as e:
-                print(f"  Erreur: {e}")
-                driver.switch_to.default_content()
-                time.sleep(1)
-
-        if not success:
+        if result == "fail":
             driver.save_screenshot("screenshot_echec.png")
-            print("Echec apres 6 tentatives")
+            print("Echec du vote serveur-prive")
             sys.exit(1)
 
-        verifier_vote(driver)
+        # Vote OK ou déjà voté -> aller cliquer VÉRIFIER MON VOTE sur Velthar
+        if velthar_flow:
+            claim_velthar(driver)
 
     finally:
         driver.quit()
