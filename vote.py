@@ -52,7 +52,6 @@ def ocr_captcha(iframe):
     config = "--psm 7 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
     def v1(img):
-        # Inversion + seuil bas (texte blanc → noir après inversion)
         img = img.convert("RGB").resize((img.width * 4, img.height * 4), Image.LANCZOS)
         img = img.convert("L")
         img = ImageOps.invert(img)
@@ -61,7 +60,6 @@ def ocr_captcha(iframe):
         return img.point(lambda x: 0 if x < 80 else 255, "1")
 
     def v2(img):
-        # Sans inversion, contraste élevé
         img = img.convert("RGB").resize((img.width * 4, img.height * 4), Image.LANCZOS)
         img = img.convert("L")
         img = ImageEnhance.Contrast(img).enhance(3.0)
@@ -69,14 +67,12 @@ def ocr_captcha(iframe):
         return img.point(lambda x: 0 if x < 200 else 255, "1")
 
     def v3(img):
-        # Juste grayscale + contraste, sans seuillage
         img = img.convert("RGB").resize((img.width * 3, img.height * 3), Image.LANCZOS)
         img = img.convert("L")
         img = ImageEnhance.Contrast(img).enhance(2.0)
         return img
 
     def v4(img):
-        # Inversion + seuil moyen
         img = img.convert("RGB").resize((img.width * 4, img.height * 4), Image.LANCZOS)
         img = img.convert("L")
         img = ImageOps.invert(img)
@@ -130,9 +126,20 @@ def type_in_captcha_input(driver, iframe, text):
             try:
                 inp = driver.find_element(By.CSS_SELECTOR, sel)
                 if inp:
+                    inp.click()
+                    time.sleep(0.2)
                     inp.clear()
-                    inp.send_keys(text)
-                    print(f"  Tapé dans iframe ({sel})")
+                    for char in text:
+                        inp.send_keys(char)
+                        time.sleep(0.05)
+                    driver.execute_script("""
+                        var el = arguments[0];
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                        el.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'a'}));
+                    """, inp)
+                    time.sleep(0.5)
+                    print(f"  Tapé + events ({sel}): '{text}'")
                     driver.switch_to.default_content()
                     return
             except Exception:
@@ -140,8 +147,9 @@ def type_in_captcha_input(driver, iframe, text):
         driver.switch_to.default_content()
     except Exception as e:
         driver.switch_to.default_content()
-        print(f"  frame switch: {e}")
+        print(f"  Erreur frame: {e}")
 
+    # Fallback ActionChains
     size = iframe.size
     actions = ActionChains(driver)
     actions.move_to_element_with_offset(iframe, int(size['width'] * 0.15), int(size['height'] * 0.50))
