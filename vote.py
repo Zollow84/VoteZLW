@@ -617,18 +617,21 @@ def vote():
             login_velthar(chk)
             chk.get(f"{VELTHAR_URL}/vote")
             time.sleep(4)
-            try:
-                body = chk.find_element(By.TAG_NAME, "body").text.lower()
-            except Exception:
-                body = ""
+            body = chk.find_element(By.TAG_NAME, "body").text.lower()
             if "prochain vote" in body:
                 m = re.search(r"prochain vote[^\d]{0,8}(\d{1,2}[:h]\d{2}(?::\d{2})?)", body)
                 quand = m.group(1) if m else "?"
                 print(f"  ⏳ Cooldown actif — prochain vote à {quand}. Sortie (proxy non utilisé).")
                 return
             print("  ✅ Cooldown fini → on vote maintenant !")
+        except Exception as e:
+            print(f"  Pré-check erreur réseau/SSL: {e} — on saute ce run, retry au prochain.")
+            return
         finally:
-            chk.quit()
+            try:
+                chk.quit()
+            except Exception:
+                pass
 
     driver = get_driver(use_proxy=True)
     try:
@@ -661,15 +664,23 @@ def vote():
         print(f"  Résultat serveur-prive: {result}")
 
         if result == "fail":
-            print("Echec du vote serveur-prive")
-            sys.exit(1)
+            print("Echec du vote serveur-prive (on réessaiera au prochain run)")
+            return
 
         if velthar_flow:
             claim_velthar(driver, velthar_handle)
 
     finally:
-        driver.quit()
+        try:
+            driver.quit()
+        except Exception:
+            pass
         stop_local_proxy()
 
 
-vote()
+# Le run ne doit JAMAIS planter (sinon GitHub envoie un mail d'échec).
+# Toute erreur transitoire est avalée -> exit 0, le prochain run (3 min) réessaie.
+try:
+    vote()
+except Exception as e:
+    print(f"Erreur non bloquante (retry au prochain run): {e}")
