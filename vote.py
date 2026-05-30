@@ -382,8 +382,6 @@ def click_voter_maintenant(driver):
     time.sleep(5)
     driver.save_screenshot("screenshot_velthar_avant_clic.png")
 
-    # Déclencher wire:click="selectWebsite(...)" du bloc serveur-prive, en retirant le href
-    # du <a> parent pour empêcher l'onglet Velthar de naviguer (il doit rester vivant).
     clicked = driver.execute_script("""
         var els = document.querySelectorAll('div, a, button');
         for (var i = 0; i < els.length; i++) {
@@ -494,7 +492,7 @@ def do_captcha_vote(driver):
 
 
 def claim_velthar(driver, velthar_handle=None):
-    """Revient sur l'onglet Velthar VIVANT (sans recharger, pour garder l'état Livewire) et clique 'VÉRIFIER MON VOTE'."""
+    """Revient sur l'onglet Velthar VIVANT et déclenche le wire:click Livewire de 'VÉRIFIER MON VOTE'."""
     print("\n--- Vérification Velthar (VÉRIFIER MON VOTE) ---")
     if velthar_handle and velthar_handle in driver.window_handles:
         driver.switch_to.window(velthar_handle)
@@ -503,37 +501,50 @@ def claim_velthar(driver, velthar_handle=None):
         driver.get(f"{VELTHAR_URL}/vote")
         time.sleep(5)
 
-    for essai in range(10):
+    for essai in range(8):
         time.sleep(5)
+
+        # Déclencher le wire:click Livewire de l'élément 'VÉRIFIER MON VOTE'
+        clicked = driver.execute_script("""
+            var els = document.querySelectorAll('div, a, button');
+            for (var i = 0; i < els.length; i++) {
+                var w = els[i].getAttribute('wire:click');
+                if (!w) continue;
+                var txt = (els[i].innerText || '').toUpperCase();
+                if (txt.indexOf('VERIF') !== -1 || txt.indexOf('VÉRIF') !== -1) {
+                    els[i].click();
+                    return w;
+                }
+            }
+            return null;
+        """)
+        page = driver.page_source.lower()
+        verif_present = ("vérifier mon vote" in page) or ("verifier mon vote" in page)
+        print(f"  Essai {essai + 1}/8 - wire:click VÉRIFIER: {clicked} | présent: {verif_present} | URL: {driver.current_url}")
+
+        time.sleep(6)  # laisser Livewire / l'API serveur-prive répondre
         driver.save_screenshot(f"screenshot_velthar_verif_{essai}.png")
 
-        # DIAGNOSTIC : sommes-nous connectés à Velthar ?
-        page = driver.page_source.lower()
-        connecte = ("zollow" in page) or ("déconnexion" in page) or ("vous avez" in page and "vote" in page)
-        print(f"  [diag] Connecté Velthar: {connecte} | URL: {driver.current_url}")
+        page2 = driver.page_source.lower()
+        succes = any(s in page2 for s in [
+            "vote vérifié", "vote verifie", "récompense", "recompense",
+            "merci", "bien été pris", "a été validé", "vote comptabilisé"
+        ])
+        verif_apres = ("vérifier mon vote" in page2) or ("verifier mon vote" in page2)
 
-        all_els = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit'], div")
-        verif_btn = None
-        for el in all_els:
-            txt = (el.text or "").strip().upper()
-            if ("VERIF" in txt or "VÉRIF" in txt) and len(txt) < 40:
-                verif_btn = el
-                break
-
-        boutons = [e.text.strip() for e in driver.find_elements(By.CSS_SELECTOR, "button, a") if e.text.strip()]
-        print(f"  Essai {essai + 1}/10 - Boutons: {boutons[:14]}")
-
-        if verif_btn:
-            driver.execute_script("arguments[0].click();", verif_btn)
-            time.sleep(4)
+        if succes or (clicked and not verif_apres):
             driver.save_screenshot("screenshot_velthar_verifie.png")
             print("  VOTE VÉRIFIÉ sur Velthar!")
             return True
 
-        print("  Bouton VÉRIFIER pas encore là, attente 10s...")
-        time.sleep(10)
+        if not clicked:
+            print("  Élément wire:click 'VÉRIFIER' introuvable")
 
-    print("  Bouton VÉRIFIER introuvable")
+        print("  Pas encore confirmé (peut-être délai API serveur-prive), attente 12s...")
+        time.sleep(12)
+
+    driver.save_screenshot("screenshot_velthar_verif_final.png")
+    print("  Vérification non confirmée après plusieurs essais")
     return False
 
 
