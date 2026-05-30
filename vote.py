@@ -376,8 +376,7 @@ def login_velthar(driver):
 
 
 def click_voter_maintenant(driver):
-    """Sur velthar.fr/vote, clique 'VOTER MAINTENANT' (déclenche l'état 'vote en cours' côté Velthar)
-    et amène sur serveur-prive."""
+    """Sur velthar.fr/vote, clique 'VOTER MAINTENANT' et amène sur serveur-prive."""
     driver.get(f"{VELTHAR_URL}/vote")
     time.sleep(5)
     driver.save_screenshot("screenshot_velthar_avant_clic.png")
@@ -502,7 +501,7 @@ def do_captcha_vote(driver):
 
 
 def claim_velthar(driver, velthar_handle=None):
-    """Navigue vers velthar.fr/vote (l'onglet est sur serveur-prive après le clic) et clique 'VÉRIFIER MON VOTE'."""
+    """Navigue vers velthar.fr/vote et clique 'VÉRIFIER MON VOTE'."""
     print("\n--- Vérification Velthar (VÉRIFIER MON VOTE) ---")
     if velthar_handle and velthar_handle in driver.window_handles:
         driver.switch_to.window(velthar_handle)
@@ -511,6 +510,11 @@ def claim_velthar(driver, velthar_handle=None):
         driver.get(f"{VELTHAR_URL}/vote")
         time.sleep(5)
         driver.save_screenshot(f"screenshot_velthar_verif_{essai}.png")
+
+        # DIAGNOSTIC : sommes-nous connectés à Velthar ?
+        page = driver.page_source.lower()
+        connecte = ("zollow" in page) or ("déconnexion" in page) or ("vous avez" in page and "vote" in page)
+        print(f"  [diag] Connecté Velthar: {connecte} | 'zollow' présent: {'zollow' in page} | 'se connecter' présent: {'se connecter' in page}")
 
         all_els = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit']")
         textes = [e.text.strip() for e in all_els if e.text.strip()]
