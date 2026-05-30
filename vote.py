@@ -381,7 +381,6 @@ def click_voter_maintenant(driver):
     driver.get(f"{VELTHAR_URL}/vote")
     time.sleep(5)
     driver.save_screenshot("screenshot_velthar_avant_clic.png")
-    before = list(driver.window_handles)
 
     # Déclencher wire:click="selectWebsite(...)" du bloc serveur-prive, en retirant le href
     # du <a> parent pour empêcher l'onglet Velthar de naviguer (il doit rester vivant).
@@ -407,23 +406,12 @@ def click_voter_maintenant(driver):
     time.sleep(6)  # laisser Livewire mettre à jour la page (-> VÉRIFIER MON VOTE)
     driver.save_screenshot("screenshot_velthar_apres_select.png")
 
-    # Ouvrir serveur-prive dans un NOUVEL onglet (l'onglet Velthar reste vivant derrière)
-    driver.execute_script("window.open(arguments[0], '_blank');", VOTE_URL)
-    time.sleep(4)
-    after = list(driver.window_handles)
-    newtabs = [h for h in after if h not in before]
-    if newtabs:
-        driver.switch_to.window(newtabs[-1])
-        print("  Onglet serveur-prive ouvert (Velthar reste vivant)")
-    else:
-        print("  ATTENTION: pas de nouvel onglet ouvert")
-
-    print(f"  URL actuelle: {driver.current_url}")
-
-    if "serveur-prive" not in (driver.current_url or ""):
-        print("  Pas sur serveur-prive → navigation directe")
-        driver.get(VOTE_URL)
-        time.sleep(3)
+    # Ouvrir serveur-prive dans un NOUVEL onglet via l'API Selenium fiable
+    # (NE touche PAS l'onglet Velthar qui reste vivant avec son bouton VÉRIFIER MON VOTE)
+    driver.switch_to.new_window('tab')
+    driver.get(VOTE_URL)
+    time.sleep(3)
+    print(f"  Onglet serveur-prive (nouveau): {driver.current_url}")
     return True
 
 
@@ -522,7 +510,7 @@ def claim_velthar(driver, velthar_handle=None):
         # DIAGNOSTIC : sommes-nous connectés à Velthar ?
         page = driver.page_source.lower()
         connecte = ("zollow" in page) or ("déconnexion" in page) or ("vous avez" in page and "vote" in page)
-        print(f"  [diag] Connecté Velthar: {connecte} | 'zollow' présent: {'zollow' in page}")
+        print(f"  [diag] Connecté Velthar: {connecte} | URL: {driver.current_url}")
 
         all_els = driver.find_elements(By.CSS_SELECTOR, "button, a, input[type='submit'], div")
         verif_btn = None
