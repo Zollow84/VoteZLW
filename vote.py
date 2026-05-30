@@ -5,6 +5,7 @@ import subprocess
 import re
 import os
 import base64
+import tempfile
 
 import requests
 import undetected_chromedriver as uc
@@ -20,6 +21,12 @@ VELTHAR_URL = "https://velthar.fr"
 VELTHAR_PASSWORD = os.environ.get("VELTHAR_PASSWORD", "")
 TWOCAPTCHA_API_KEY = os.environ.get("TWOCAPTCHA_API_KEY", "")
 
+# Proxy résidentiel (authentifié)
+PROXY_HOST = os.environ.get("PROXY_HOST", "")
+PROXY_PORT = os.environ.get("PROXY_PORT", "")
+PROXY_USER = os.environ.get("PROXY_USER", "")
+PROXY_PASS = os.environ.get("PROXY_PASS", "")
+
 CAPTCHA_2CAPTCHA_IMG = "screenshot_captcha_2captcha.png"
 
 
@@ -34,15 +41,92 @@ def get_chrome_version():
     return None
 
 
+def create_proxy_extension():
+    """Crée une extension Chrome (non packée) qui gère l'authentification proxy."""
+    manifest = """
+{
+    "version": "1.0.0",
+    "manifest_version": 2,
+    "name": "Proxy Auth",
+    "permissions": [
+        "proxy",
+        "tabs",
+        "unlimitedStorage",
+        "storage",
+        "<all_urls>",
+        "webRequest",
+        "webRequestBlocking"
+    ],
+    "background": { "scripts": ["background.js"] },
+    "minimum_chrome_version": "22.0.0"
+}
+"""
+    background = """
+var config = {
+    mode: "fixed_servers",
+    rules: {
+        singleProxy: {
+            scheme: "http",
+            host: "%s",
+            port: parseInt(%s)
+        },
+        bypassList: ["localhost"]
+    }
+};
+chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+function callbackFn(details) {
+    return {
+        authCredentials: {
+            username: "%s",
+            password: "%s"
+        }
+    };
+}
+chrome.webRequest.onAuthRequired.addListener(
+    callbackFn,
+    {urls: ["<all_urls>"]},
+    ['blocking']
+);
+""" % (PROXY_HOST, PROXY_PORT, PROXY_USER, PROXY_PASS)
+
+    ext_dir = tempfile.mkdtemp(prefix="proxy_ext_")
+    with open(os.path.join(ext_dir, "manifest.json"), "w") as f:
+        f.write(manifest)
+    with open(os.path.join(ext_dir, "background.js"), "w") as f:
+        f.write(background)
+    return ext_dir
+
+
 def get_driver():
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1280,900")
+
+    if PROXY_HOST and PROXY_PORT:
+        if PROXY_USER:
+            ext_dir = create_proxy_extension()
+            options.add_argument(f"--load-extension={ext_dir}")
+            print(f"  Proxy (auth): {PROXY_HOST}:{PROXY_PORT}")
+        else:
+            options.add_argument(f"--proxy-server=http://{PROXY_HOST}:{PROXY_PORT}")
+            print(f"  Proxy: {PROXY_HOST}:{PROXY_PORT}")
+
     version = get_chrome_version()
     if version:
         print(f"  Chrome version: {version}")
     return uc.Chrome(options=options, use_subprocess=True, version_main=version)
+
+
+def check_ip(driver):
+    """Affiche l'IP utilisée (debug proxy)."""
+    try:
+        driver.get("https://api.ipify.org")
+        time.sleep(2)
+        ip = driver.find_element(By.TAG_NAME, "body").text.strip()
+        print(f"  IP sortie: {ip}")
+    except Exception as e:
+        print(f"  IP check erreur: {e}")
 
 
 def prepare_captcha_images(iframe):
@@ -353,12 +437,16 @@ def verifier_vote(driver):
 def vote():
     print(f"[{time.strftime('%H:%M:%S')}] Vote pour {PSEUDO}")
     if TWOCAPTCHA_API_KEY:
-        print("  Mode: 2captcha (résolution humaine)")
+        print("  Mode captcha: 2captcha (résolution humaine)")
     else:
-        print("  Mode: OCR Tesseract (TWOCAPTCHA_API_KEY absent)")
+        print("  Mode captcha: OCR Tesseract (TWOCAPTCHA_API_KEY absent)")
 
     driver = get_driver()
     try:
+        # Vérifier l'IP de sortie (proxy)
+        if PROXY_HOST:
+            check_ip(driver)
+
         driver.get(VOTE_URL)
         time.sleep(8)
         driver.save_screenshot("screenshot_page.png")
@@ -416,7 +504,7 @@ def vote():
                 driver.save_screenshot(f"screenshot_apres_vote_{attempt}.png")
                 page = driver.page_source.lower()
 
-                for kw in ["validé", "valide", "erreur", "captcha"]:
+                for kw in ["validé", "valide", "erreur", "captcha", "ip"]:
                     idx = page.find(kw)
                     if idx >= 0:
                         print(f"  '{kw}': ...{page[max(0,idx-20):idx+80]}...")
@@ -424,6 +512,9 @@ def vote():
                 if any(w in page for w in ["vote validé", "vote valide", "votre vote a"]):
                     print("VOTE REUSSI!")
                     success = True
+                    break
+                elif "ip n'est pas autorisée" in page or "ip n est pas autorisee" in page:
+                    print("  ERREUR IP : l'IP n'est pas autorisée à voter (proxy bloqué ou cooldown)")
                     break
                 else:
                     print("  Non confirmé, refresh...")
