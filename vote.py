@@ -376,7 +376,8 @@ def login_velthar(driver):
 
 
 def click_voter_maintenant(driver):
-    """Sur velthar.fr/vote, clique 'VOTER MAINTENANT' et amène sur serveur-prive."""
+    """Sur velthar.fr/vote, clique 'VOTER MAINTENANT' (déclenche l'état 'vote en cours' côté Velthar)
+    et amène sur serveur-prive."""
     driver.get(f"{VELTHAR_URL}/vote")
     time.sleep(5)
     driver.save_screenshot("screenshot_velthar_avant_clic.png")
@@ -394,6 +395,19 @@ def click_voter_maintenant(driver):
         return False
 
     print(f"  Clic sur: '{target.text.strip()}'")
+    # DIAGNOSTIC : structure du bouton (pour savoir comment forcer un nouvel onglet)
+    try:
+        html = driver.execute_script("return arguments[0].outerHTML;", target)
+        href = target.get_attribute("href")
+        onclick = target.get_attribute("onclick")
+        parent_html = driver.execute_script(
+            "return arguments[0].parentElement ? arguments[0].parentElement.outerHTML.substring(0,400) : '';", target)
+        print(f"  [diag] tag={target.tag_name} href={href} onclick={onclick}")
+        print(f"  [diag] HTML bouton: {html[:300]}")
+        print(f"  [diag] HTML parent: {parent_html}")
+    except Exception as e:
+        print(f"  [diag] erreur inspection: {e}")
+    # Forcer l'ouverture dans un NOUVEL onglet pour garder la page Velthar vivante
     try:
         driver.execute_script("arguments[0].setAttribute('target', '_blank');", target)
     except Exception:
@@ -405,13 +419,14 @@ def click_voter_maintenant(driver):
         return False
     time.sleep(6)
 
+    # Basculer sur le nouvel onglet serveur-prive (l'onglet Velthar reste vivant derrière)
     after = list(driver.window_handles)
     if len(after) > len(before):
         newh = [h for h in after if h not in before][0]
         driver.switch_to.window(newh)
-        print("  Nouvel onglet serveur-prive ouvert")
+        print("  Nouvel onglet serveur-prive ouvert (Velthar reste vivant)")
     else:
-        print("  (même onglet : navigation vers serveur-prive)")
+        print("  ATTENTION: pas de nouvel onglet, la page Velthar a peut-être été remplacée")
 
     print(f"  URL actuelle: {driver.current_url}")
 
