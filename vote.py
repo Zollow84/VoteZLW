@@ -543,7 +543,6 @@ def claim_velthar(driver, velthar_handle=None):
             time.sleep(1)
         except Exception:
             pass
-        # Vrai clic, avec plusieurs méthodes de secours
         try:
             el.click()
             return True
@@ -581,7 +580,6 @@ def claim_velthar(driver, velthar_handle=None):
 
     for essai in range(8):
         accepter_cookies()
-        # VRAI clic sur le bouton 'VÉRIFIER MON VOTE'
         clicked = clic_reel_verifier()
         time.sleep(7)  # laisser Livewire / l'API serveur-prive répondre
         driver.save_screenshot(f"screenshot_velthar_verif_{essai}.png")
@@ -591,7 +589,6 @@ def claim_velthar(driver, velthar_handle=None):
         verif_apres = ("vérifier mon vote" in page2) or ("verifier mon vote" in page2)
         print(f"  Essai {essai + 1}/8 - cliqué: {clicked} | votes: {count_after} | bouton encore là: {verif_apres}")
 
-        # Succès UNIQUEMENT si le compteur de votes augmente
         if count_before is not None and count_after is not None and count_after > count_before:
             driver.save_screenshot("screenshot_velthar_verifie.png")
             print(f"  VOTE VÉRIFIÉ sur Velthar! (compteur {count_before} -> {count_after})")
@@ -611,6 +608,27 @@ def vote():
         print("  Mode captcha: 2captcha (résolution humaine)")
     else:
         print("  Mode captcha: OCR Tesseract (TWOCAPTCHA_API_KEY absent)")
+
+    # PRÉ-CHECK COOLDOWN SANS PROXY (économise la bande passante Webshare 1 Go) :
+    # on vérifie sur Velthar (non bloqué) si serveur-prive est encore en cooldown.
+    if VELTHAR_PASSWORD:
+        chk = get_driver(use_proxy=False)
+        try:
+            login_velthar(chk)
+            chk.get(f"{VELTHAR_URL}/vote")
+            time.sleep(4)
+            try:
+                body = chk.find_element(By.TAG_NAME, "body").text.lower()
+            except Exception:
+                body = ""
+            if "prochain vote" in body:
+                m = re.search(r"prochain vote[^\d]{0,8}(\d{1,2}[:h]\d{2}(?::\d{2})?)", body)
+                quand = m.group(1) if m else "?"
+                print(f"  ⏳ Cooldown actif — prochain vote à {quand}. Sortie (proxy non utilisé).")
+                return
+            print("  ✅ Cooldown fini → on vote maintenant !")
+        finally:
+            chk.quit()
 
     driver = get_driver(use_proxy=True)
     try:
