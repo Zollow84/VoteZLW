@@ -5,7 +5,6 @@ import subprocess
 import re
 import os
 import base64
-import tempfile
 
 import requests
 import undetected_chromedriver as uc
@@ -41,80 +40,40 @@ def get_chrome_version():
     return None
 
 
-def create_proxy_extension():
-    """Crée une extension Chrome (non packée) qui gère l'authentification proxy."""
-    manifest = """
-{
-    "version": "1.0.0",
-    "manifest_version": 2,
-    "name": "Proxy Auth",
-    "permissions": [
-        "proxy",
-        "tabs",
-        "unlimitedStorage",
-        "storage",
-        "<all_urls>",
-        "webRequest",
-        "webRequestBlocking"
-    ],
-    "background": { "scripts": ["background.js"] },
-    "minimum_chrome_version": "22.0.0"
-}
-"""
-    background = """
-var config = {
-    mode: "fixed_servers",
-    rules: {
-        singleProxy: {
-            scheme: "http",
-            host: "%s",
-            port: parseInt(%s)
-        },
-        bypassList: ["localhost"]
-    }
-};
-chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
-function callbackFn(details) {
-    return {
-        authCredentials: {
-            username: "%s",
-            password: "%s"
-        }
-    };
-}
-chrome.webRequest.onAuthRequired.addListener(
-    callbackFn,
-    {urls: ["<all_urls>"]},
-    ['blocking']
-);
-""" % (PROXY_HOST, PROXY_PORT, PROXY_USER, PROXY_PASS)
-
-    ext_dir = tempfile.mkdtemp(prefix="proxy_ext_")
-    with open(os.path.join(ext_dir, "manifest.json"), "w") as f:
-        f.write(manifest)
-    with open(os.path.join(ext_dir, "background.js"), "w") as f:
-        f.write(background)
-    return ext_dir
-
-
 def get_driver():
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1280,900")
 
-    if PROXY_HOST and PROXY_PORT:
-        if PROXY_USER:
-            ext_dir = create_proxy_extension()
-            options.add_argument(f"--load-extension={ext_dir}")
-            print(f"  Proxy (auth): {PROXY_HOST}:{PROXY_PORT}")
-        else:
-            options.add_argument(f"--proxy-server=http://{PROXY_HOST}:{PROXY_PORT}")
-            print(f"  Proxy: {PROXY_HOST}:{PROXY_PORT}")
-
     version = get_chrome_version()
     if version:
         print(f"  Chrome version: {version}")
+
+    # Proxy authentifié via selenium-wire (compatible Chrome récent, sans extension)
+    if PROXY_HOST and PROXY_PORT and PROXY_USER:
+        from seleniumwire import undetected_chromedriver as wire_uc
+        proxy_url = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+        sw_options = {
+            "proxy": {
+                "http": proxy_url,
+                "https": proxy_url,
+                "no_proxy": "localhost,127.0.0.1",
+            }
+        }
+        print(f"  Proxy (selenium-wire): {PROXY_HOST}:{PROXY_PORT}")
+        return wire_uc.Chrome(
+            options=options,
+            seleniumwire_options=sw_options,
+            use_subprocess=True,
+            version_main=version,
+        )
+
+    # Proxy sans authentification
+    if PROXY_HOST and PROXY_PORT:
+        options.add_argument(f"--proxy-server=http://{PROXY_HOST}:{PROXY_PORT}")
+        print(f"  Proxy: {PROXY_HOST}:{PROXY_PORT}")
+
     return uc.Chrome(options=options, use_subprocess=True, version_main=version)
 
 
