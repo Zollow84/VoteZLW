@@ -23,7 +23,7 @@ jobs:
           echo "DISPLAY=:99" >> $GITHUB_ENV
 
       - name: Installer les packages Python
-        run: pip install undetected-chromedriver selenium pytesseract Pillow requests
+        run: pip install undetected-chromedriver selenium pytesseract Pillow requests selenium-wire blinker==1.7.0 setuptools
 
       - name: Voter
         env:
