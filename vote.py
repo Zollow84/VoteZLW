@@ -40,18 +40,61 @@ def get_driver():
     return uc.Chrome(options=options, use_subprocess=True, version_main=version)
 
 
-def preprocess_image(image):
-    image = image.convert("RGB")
-    w, h = image.size
-    image = image.resize((w * 4, h * 4), Image.LANCZOS)
-    image = image.convert("L")
-    # Inverser : texte blanc sur fond coloré → texte noir sur fond clair
-    image = ImageOps.invert(image)
-    enhancer = ImageEnhance.Contrast(image)
-    image = enhancer.enhance(2.5)
-    image = image.filter(ImageFilter.SHARPEN)
-    image = image.point(lambda x: 0 if x < 128 else 255, "1")
-    return image
+def ocr_captcha(iframe):
+    img_bytes = iframe.screenshot_as_png
+    full_img = Image.open(io.BytesIO(img_bytes))
+    full_img.save("screenshot_captcha_iframe.png")
+    w, h = full_img.size
+    print(f"  Iframe: {w}x{h}px")
+    crop = full_img.crop((int(w * 0.38), 2, int(w * 0.82), h - 2))
+    crop.save("screenshot_captcha_crop.png")
+
+    config = "--psm 7 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+    def v1(img):
+        # Inversion + seuil bas (texte blanc → noir après inversion)
+        img = img.convert("RGB").resize((img.width * 4, img.height * 4), Image.LANCZOS)
+        img = img.convert("L")
+        img = ImageOps.invert(img)
+        img = ImageEnhance.Contrast(img).enhance(3.0)
+        img = img.filter(ImageFilter.SHARPEN)
+        return img.point(lambda x: 0 if x < 80 else 255, "1")
+
+    def v2(img):
+        # Sans inversion, contraste élevé
+        img = img.convert("RGB").resize((img.width * 4, img.height * 4), Image.LANCZOS)
+        img = img.convert("L")
+        img = ImageEnhance.Contrast(img).enhance(3.0)
+        img = img.filter(ImageFilter.SHARPEN)
+        return img.point(lambda x: 0 if x < 200 else 255, "1")
+
+    def v3(img):
+        # Juste grayscale + contraste, sans seuillage
+        img = img.convert("RGB").resize((img.width * 3, img.height * 3), Image.LANCZOS)
+        img = img.convert("L")
+        img = ImageEnhance.Contrast(img).enhance(2.0)
+        return img
+
+    def v4(img):
+        # Inversion + seuil moyen
+        img = img.convert("RGB").resize((img.width * 4, img.height * 4), Image.LANCZOS)
+        img = img.convert("L")
+        img = ImageOps.invert(img)
+        return img.point(lambda x: 0 if x < 120 else 255, "1")
+
+    for i, fn in enumerate([v1, v2, v3, v4], 1):
+        try:
+            processed = fn(crop.copy())
+            processed.save(f"screenshot_captcha_v{i}.png")
+            text = pytesseract.image_to_string(processed, config=config)
+            text = text.strip().replace(" ", "").replace("\n", "")
+            print(f"  OCR v{i}: '{text}'")
+            if len(text) >= 3:
+                return text
+        except Exception as e:
+            print(f"  OCR v{i} erreur: {e}")
+
+    return ""
 
 
 def get_mtcaptcha_iframe(driver):
@@ -63,32 +106,16 @@ def get_mtcaptcha_iframe(driver):
     return None
 
 
-def ocr_captcha(iframe):
-    img_bytes = iframe.screenshot_as_png
-    full_img = Image.open(io.BytesIO(img_bytes))
-    full_img.save("screenshot_captcha_iframe.png")
-    w, h = full_img.size
-    print(f"  Iframe: {w}x{h}px")
-    crop = full_img.crop((int(w * 0.38), 2, int(w * 0.82), h - 2))
-    crop.save("screenshot_captcha_crop.png")
-    processed = preprocess_image(crop)
-    processed.save("screenshot_captcha_processed.png")
-    config = "--psm 7 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-    text = pytesseract.image_to_string(processed, config=config)
-    return text.strip().replace(" ", "").replace("\n", "")
-
-
 def enter_pseudo(driver):
     for sel in ["input[name='username']", "input[name='pseudo']",
-                "input[placeholder*='pseudo' i]", "input[placeholder*='Pseudo']",
-                "input[placeholder*='pseudonyme' i]", "input[type='text']"]:
+                "input[placeholder*='pseudonyme' i]", "input[placeholder*='pseudo' i]",
+                "input[type='text']"]:
         try:
             el = driver.find_element(By.CSS_SELECTOR, sel)
             if el and el.is_displayed():
                 el.clear()
                 time.sleep(0.2)
                 el.send_keys(PSEUDO)
-                print(f"  Pseudo entré ({sel})")
                 return True
         except Exception:
             continue
@@ -96,7 +123,6 @@ def enter_pseudo(driver):
 
 
 def type_in_captcha_input(driver, iframe, text):
-    # Méthode 1 : switch_to.frame
     try:
         driver.switch_to.frame(iframe)
         for sel in ["#mtcaptcha-verifyinput", "input[id*='verify']",
@@ -116,12 +142,9 @@ def type_in_captcha_input(driver, iframe, text):
         driver.switch_to.default_content()
         print(f"  frame switch: {e}")
 
-    # Méthode 2 : ActionChains
     size = iframe.size
-    input_x = int(size['width'] * 0.15)
-    input_y = int(size['height'] * 0.50)
     actions = ActionChains(driver)
-    actions.move_to_element_with_offset(iframe, input_x, input_y)
+    actions.move_to_element_with_offset(iframe, int(size['width'] * 0.15), int(size['height'] * 0.50))
     actions.click()
     actions.pause(0.3)
     actions.key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)
@@ -197,7 +220,6 @@ def verifier_vote(driver):
                 return
 
         print("  Bouton VÉRIFIER introuvable")
-
     except Exception as e:
         print(f"  Erreur: {e}")
 
@@ -229,17 +251,15 @@ def vote():
                     continue
 
                 captcha_text = ocr_captcha(iframe)
-                print(f"  OCR: '{captcha_text}'")
+                print(f"  OCR final: '{captcha_text}'")
 
                 if len(captcha_text) < 3:
                     refresh_captcha_click(driver, iframe)
                     time.sleep(2)
                     continue
 
-                # Re-entrer le pseudo si nécessaire
                 enter_pseudo(driver)
                 time.sleep(0.3)
-
                 type_in_captcha_input(driver, iframe, captcha_text)
                 time.sleep(0.5)
 
