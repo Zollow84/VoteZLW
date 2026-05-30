@@ -29,6 +29,10 @@ jobs:
         env:
           VELTHAR_PASSWORD: ${{ secrets.VELTHAR_PASSWORD }}
           TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
+          PROXY_HOST: ${{ secrets.PROXY_HOST }}
+          PROXY_PORT: ${{ secrets.PROXY_PORT }}
+          PROXY_USER: ${{ secrets.PROXY_USER }}
+          PROXY_PASS: ${{ secrets.PROXY_PASS }}
         run: python vote.py
 
       - name: Sauvegarder screenshots
