@@ -269,7 +269,23 @@ def vote():
                 enter_pseudo(driver)
                 time.sleep(0.3)
                 type_in_captcha_input(driver, iframe, captcha_text)
-                time.sleep(0.5)
+                time.sleep(4)  # Attendre validation serveur MTCaptcha
+
+                # Vérifier le token MTCaptcha
+                token_found = False
+                try:
+                    token_els = driver.find_elements(By.CSS_SELECTOR,
+                        "input[name='captcha'], input[id='captcha'], input[type='hidden']")
+                    for el in token_els:
+                        val = el.get_attribute('value') or ''
+                        if len(val) > 5:
+                            print(f"  Token captcha: '{val[:30]}...'")
+                            token_found = True
+                            break
+                    if not token_found:
+                        print("  Pas de token captcha détecté")
+                except Exception:
+                    pass
 
                 vote_button = driver.find_element(By.CSS_SELECTOR,
                     "button[type='submit'], input[type='submit']")
