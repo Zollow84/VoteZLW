@@ -26,7 +26,10 @@ PROXY_PORT = os.environ.get("PROXY_PORT", "")
 PROXY_USER = os.environ.get("PROXY_USER", "")
 PROXY_PASS = os.environ.get("PROXY_PASS", "")
 
+LOCAL_PROXY_PORT = 8899
 CAPTCHA_2CAPTCHA_IMG = "screenshot_captcha_2captcha.png"
+
+_proxy_proc = None
 
 
 def get_chrome_version():
@@ -40,6 +43,28 @@ def get_chrome_version():
     return None
 
 
+def start_local_proxy():
+    """Lance pproxy : relais local 127.0.0.1 -> proxy authentifié upstream (tunnel, sans interception SSL)."""
+    global _proxy_proc
+    remote = f"http://{PROXY_HOST}:{PROXY_PORT}#{PROXY_USER}:{PROXY_PASS}"
+    cmd = [sys.executable, "-m", "pproxy",
+           "-l", f"http://127.0.0.1:{LOCAL_PROXY_PORT}",
+           "-r", remote]
+    _proxy_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(4)
+    print(f"  Proxy local pproxy:{LOCAL_PROXY_PORT} -> {PROXY_HOST}:{PROXY_PORT}")
+
+
+def stop_local_proxy():
+    global _proxy_proc
+    if _proxy_proc:
+        try:
+            _proxy_proc.terminate()
+        except Exception:
+            pass
+        _proxy_proc = None
+
+
 def get_driver():
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
@@ -50,27 +75,12 @@ def get_driver():
     if version:
         print(f"  Chrome version: {version}")
 
-    # Proxy authentifié via selenium-wire (compatible Chrome récent, sans extension)
     if PROXY_HOST and PROXY_PORT and PROXY_USER:
-        from seleniumwire import undetected_chromedriver as wire_uc
-        proxy_url = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
-        sw_options = {
-            "proxy": {
-                "http": proxy_url,
-                "https": proxy_url,
-                "no_proxy": "localhost,127.0.0.1",
-            }
-        }
-        print(f"  Proxy (selenium-wire): {PROXY_HOST}:{PROXY_PORT}")
-        return wire_uc.Chrome(
-            options=options,
-            seleniumwire_options=sw_options,
-            use_subprocess=True,
-            version_main=version,
-        )
-
-    # Proxy sans authentification
-    if PROXY_HOST and PROXY_PORT:
+        # Proxy authentifié via relais local pproxy
+        start_local_proxy()
+        options.add_argument(f"--proxy-server=http://127.0.0.1:{LOCAL_PROXY_PORT}")
+    elif PROXY_HOST and PROXY_PORT:
+        # Proxy sans authentification
         options.add_argument(f"--proxy-server=http://{PROXY_HOST}:{PROXY_PORT}")
         print(f"  Proxy: {PROXY_HOST}:{PROXY_PORT}")
 
@@ -496,6 +506,7 @@ def vote():
 
     finally:
         driver.quit()
+        stop_local_proxy()
 
 
 vote()
