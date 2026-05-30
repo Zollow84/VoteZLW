@@ -46,46 +46,40 @@ def ocr_captcha(iframe):
     full_img.save("screenshot_captcha_iframe.png")
     w, h = full_img.size
     print(f"  Iframe: {w}x{h}px")
-    crop = full_img.crop((int(w * 0.38), 2, int(w * 0.82), h - 2))
+
+    # Crop serré sur le texte uniquement (exclure "Vérifié avec" en bas)
+    crop = full_img.crop((int(w * 0.38), 2, int(w * 0.82), int(h * 0.62)))
     crop.save("screenshot_captcha_crop.png")
 
-    config = "--psm 7 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    cfg_word  = "--psm 8 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    cfg_line  = "--psm 7 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    cfg_block = "--psm 6 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
-    def v1(img):
-        img = img.convert("RGB").resize((img.width * 4, img.height * 4), Image.LANCZOS)
+    def prep(img, invert=False, threshold=128, scale=4):
+        img = img.convert("RGB").resize((img.width * scale, img.height * scale), Image.LANCZOS)
         img = img.convert("L")
-        img = ImageOps.invert(img)
+        if invert:
+            img = ImageOps.invert(img)
         img = ImageEnhance.Contrast(img).enhance(3.0)
         img = img.filter(ImageFilter.SHARPEN)
-        return img.point(lambda x: 0 if x < 80 else 255, "1")
+        return img.point(lambda x: 0 if x < threshold else 255, "1")
 
-    def v2(img):
-        img = img.convert("RGB").resize((img.width * 4, img.height * 4), Image.LANCZOS)
-        img = img.convert("L")
-        img = ImageEnhance.Contrast(img).enhance(3.0)
-        img = img.filter(ImageFilter.SHARPEN)
-        return img.point(lambda x: 0 if x < 200 else 255, "1")
+    variants = [
+        (prep(crop.copy(), invert=True,  threshold=80),  cfg_word),
+        (prep(crop.copy(), invert=False, threshold=200), cfg_word),
+        (prep(crop.copy(), invert=True,  threshold=80),  cfg_line),
+        (prep(crop.copy(), invert=False, threshold=150), cfg_block),
+        (prep(crop.copy(), invert=True,  threshold=120), cfg_word),
+        (prep(crop.copy(), invert=False, threshold=100), cfg_word),
+    ]
 
-    def v3(img):
-        img = img.convert("RGB").resize((img.width * 3, img.height * 3), Image.LANCZOS)
-        img = img.convert("L")
-        img = ImageEnhance.Contrast(img).enhance(2.0)
-        return img
-
-    def v4(img):
-        img = img.convert("RGB").resize((img.width * 4, img.height * 4), Image.LANCZOS)
-        img = img.convert("L")
-        img = ImageOps.invert(img)
-        return img.point(lambda x: 0 if x < 120 else 255, "1")
-
-    for i, fn in enumerate([v1, v2, v3, v4], 1):
+    for i, (processed, cfg) in enumerate(variants, 1):
         try:
-            processed = fn(crop.copy())
             processed.save(f"screenshot_captcha_v{i}.png")
-            text = pytesseract.image_to_string(processed, config=config)
+            text = pytesseract.image_to_string(processed, config=cfg)
             text = text.strip().replace(" ", "").replace("\n", "")
             print(f"  OCR v{i}: '{text}'")
-            if len(text) >= 3:
+            if len(text) >= 4:
                 return text
         except Exception as e:
             print(f"  OCR v{i} erreur: {e}")
@@ -100,6 +94,29 @@ def get_mtcaptcha_iframe(driver):
         if "mtcaptcha" in src:
             return iframe
     return None
+
+
+def get_mtcaptcha_token(driver):
+    try:
+        token = driver.execute_script(
+            "return window.mtcaptcha ? window.mtcaptcha.getVerifiedToken() : null"
+        )
+        if token and len(token) > 10:
+            return token
+    except Exception:
+        pass
+    try:
+        for sel in ["input[name='mtcaptcha-verifiedtoken']",
+                    "input[name='mtcaptchatoken']",
+                    "input[id='mtcaptcha-verifiedtoken']"]:
+            els = driver.find_elements(By.CSS_SELECTOR, sel)
+            for el in els:
+                v = el.get_attribute('value') or ''
+                if len(v) > 10:
+                    return v
+    except Exception:
+        pass
+    return ""
 
 
 def enter_pseudo(driver):
@@ -149,7 +166,6 @@ def type_in_captcha_input(driver, iframe, text):
         driver.switch_to.default_content()
         print(f"  Erreur frame: {e}")
 
-    # Fallback ActionChains
     size = iframe.size
     actions = ActionChains(driver)
     actions.move_to_element_with_offset(iframe, int(size['width'] * 0.15), int(size['height'] * 0.50))
@@ -261,7 +277,7 @@ def vote():
                 captcha_text = ocr_captcha(iframe)
                 print(f"  OCR final: '{captcha_text}'")
 
-                if len(captcha_text) < 3:
+                if len(captcha_text) < 4:
                     refresh_captcha_click(driver, iframe)
                     time.sleep(2)
                     continue
@@ -269,33 +285,13 @@ def vote():
                 enter_pseudo(driver)
                 time.sleep(0.3)
 
-                # Lire le token AVANT de taper
-                token_before = ""
-                try:
-                    for el in driver.find_elements(By.CSS_SELECTOR,
-                            "input[name='captcha'], input[id='captcha'], input[type='hidden']"):
-                        v = el.get_attribute('value') or ''
-                        if len(v) > 5:
-                            token_before = v
-                            break
-                except Exception:
-                    pass
+                token_before = get_mtcaptcha_token(driver)
                 print(f"  Token avant: '{token_before[:20]}...'" if token_before else "  Token avant: aucun")
 
                 type_in_captcha_input(driver, iframe, captcha_text)
-                time.sleep(4)  # Attendre validation serveur MTCaptcha
+                time.sleep(4)
 
-                # Vérifier que le token a CHANGÉ (nouvelle validation MTCaptcha)
-                token_after = ""
-                try:
-                    for el in driver.find_elements(By.CSS_SELECTOR,
-                            "input[name='captcha'], input[id='captcha'], input[type='hidden']"):
-                        v = el.get_attribute('value') or ''
-                        if len(v) > 5:
-                            token_after = v
-                            break
-                except Exception:
-                    pass
+                token_after = get_mtcaptcha_token(driver)
                 print(f"  Token après: '{token_after[:20]}...'" if token_after else "  Token après: aucun")
 
                 if not token_after or token_after == token_before:
@@ -306,7 +302,7 @@ def vote():
                     time.sleep(2)
                     continue
 
-                print(f"  Nouveau token OK, soumission...")
+                print("  Nouveau token OK, soumission...")
                 vote_button = driver.find_element(By.CSS_SELECTOR,
                     "button[type='submit'], input[type='submit']")
                 vote_button.click()
