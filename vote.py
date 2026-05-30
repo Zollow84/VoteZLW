@@ -492,7 +492,8 @@ def do_captcha_vote(driver):
 
 
 def claim_velthar(driver, velthar_handle=None):
-    """Revient sur l'onglet Velthar VIVANT et déclenche le wire:click Livewire de 'VÉRIFIER MON VOTE'."""
+    """Revient sur l'onglet Velthar VIVANT, accepte les cookies, et fait un VRAI clic sur 'VÉRIFIER MON VOTE'.
+    Succès confirmé uniquement si le compteur de votes augmente."""
     print("\n--- Vérification Velthar (VÉRIFIER MON VOTE) ---")
     if velthar_handle and velthar_handle in driver.window_handles:
         driver.switch_to.window(velthar_handle)
@@ -501,50 +502,106 @@ def claim_velthar(driver, velthar_handle=None):
         driver.get(f"{VELTHAR_URL}/vote")
         time.sleep(5)
 
-    for essai in range(8):
-        time.sleep(5)
+    def get_vote_count():
+        try:
+            txt = driver.find_element(By.TAG_NAME, "body").text.lower()
+            m = re.search(r"vous avez\s+(\d+)\s+vote", txt)
+            return int(m.group(1)) if m else None
+        except Exception:
+            return None
 
-        # Déclencher le wire:click Livewire de l'élément 'VÉRIFIER MON VOTE'
-        clicked = driver.execute_script("""
-            var els = document.querySelectorAll('div, a, button');
-            for (var i = 0; i < els.length; i++) {
-                var w = els[i].getAttribute('wire:click');
-                if (!w) continue;
-                var txt = (els[i].innerText || '').toUpperCase();
-                if (txt.indexOf('VERIF') !== -1 || txt.indexOf('VÉRIF') !== -1) {
-                    els[i].click();
-                    return w;
-                }
+    def accepter_cookies():
+        """Le site exige l'acceptation des cookies pour fonctionner."""
+        try:
+            for el in driver.find_elements(By.CSS_SELECTOR, "button, a"):
+                if (el.text or "").strip().lower() in ("accepter", "j'accepte", "accept"):
+                    try:
+                        el.click()
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", el)
+                    print("  Cookies acceptés")
+                    time.sleep(2)
+                    return
+        except Exception:
+            pass
+
+    def clic_reel_verifier():
+        """Trouve le bouton VÉRIFIER et fait un VRAI clic (Selenium) dessus."""
+        el = None
+        for e in driver.find_elements(By.CSS_SELECTOR, "a, button, div"):
+            try:
+                t = (e.text or "").strip().upper()
+                if ("VERIF" in t or "VÉRIF" in t) and len(t) < 40 and e.is_displayed():
+                    el = e
+                    break
+            except Exception:
+                continue
+        if not el:
+            return False
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+            time.sleep(1)
+        except Exception:
+            pass
+        # Vrai clic, avec plusieurs méthodes de secours
+        try:
+            el.click()
+            return True
+        except Exception:
+            pass
+        try:
+            ActionChains(driver).move_to_element(el).pause(0.3).click().perform()
+            return True
+        except Exception:
+            pass
+        try:
+            driver.execute_script("arguments[0].click();", el)
+            return True
+        except Exception:
+            return False
+
+    accepter_cookies()
+    count_before = get_vote_count()
+    print(f"  Votes avant: {count_before}")
+
+    # DIAGNOSTIC : structure exacte du bouton VÉRIFIER MON VOTE
+    info = driver.execute_script("""
+        var els = document.querySelectorAll('div, a, button');
+        for (var i=0;i<els.length;i++){
+            var t=(els[i].innerText||'').toUpperCase();
+            if((t.indexOf('VERIF')!==-1 || t.indexOf('VÉRIF')!==-1) && t.length<40){
+                var attrs=[];
+                for(var j=0;j<els[i].attributes.length;j++){attrs.push(els[i].attributes[j].name+'='+els[i].attributes[j].value);}
+                return els[i].tagName+' :: '+attrs.join(' ')+' :: '+els[i].outerHTML.substring(0,220);
             }
-            return null;
-        """)
-        page = driver.page_source.lower()
-        verif_present = ("vérifier mon vote" in page) or ("verifier mon vote" in page)
-        print(f"  Essai {essai + 1}/8 - wire:click VÉRIFIER: {clicked} | présent: {verif_present} | URL: {driver.current_url}")
+        }
+        return null;
+    """)
+    print(f"  [diag] VÉRIFIER élément: {info}")
 
-        time.sleep(6)  # laisser Livewire / l'API serveur-prive répondre
+    for essai in range(8):
+        accepter_cookies()
+        # VRAI clic sur le bouton 'VÉRIFIER MON VOTE'
+        clicked = clic_reel_verifier()
+        time.sleep(7)  # laisser Livewire / l'API serveur-prive répondre
         driver.save_screenshot(f"screenshot_velthar_verif_{essai}.png")
 
+        count_after = get_vote_count()
         page2 = driver.page_source.lower()
-        succes = any(s in page2 for s in [
-            "vote vérifié", "vote verifie", "récompense", "recompense",
-            "merci", "bien été pris", "a été validé", "vote comptabilisé"
-        ])
         verif_apres = ("vérifier mon vote" in page2) or ("verifier mon vote" in page2)
+        print(f"  Essai {essai + 1}/8 - cliqué: {clicked} | votes: {count_after} | bouton encore là: {verif_apres}")
 
-        if succes or (clicked and not verif_apres):
+        # Succès UNIQUEMENT si le compteur de votes augmente
+        if count_before is not None and count_after is not None and count_after > count_before:
             driver.save_screenshot("screenshot_velthar_verifie.png")
-            print("  VOTE VÉRIFIÉ sur Velthar!")
+            print(f"  VOTE VÉRIFIÉ sur Velthar! (compteur {count_before} -> {count_after})")
             return True
 
-        if not clicked:
-            print("  Élément wire:click 'VÉRIFIER' introuvable")
-
-        print("  Pas encore confirmé (peut-être délai API serveur-prive), attente 12s...")
+        print("  Pas encore confirmé (compteur inchangé), attente 12s...")
         time.sleep(12)
 
     driver.save_screenshot("screenshot_velthar_verif_final.png")
-    print("  Vérification non confirmée après plusieurs essais")
+    print("  Vérification non confirmée (compteur inchangé après plusieurs essais)")
     return False
 
 
